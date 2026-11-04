@@ -1,11 +1,17 @@
 name: Release
 
-# v* 태그를 푸시하면 Linux 러너에서 .NET Framework 4.8 exe 를 빌드해 릴리스에 첨부한다.
+# Actions 탭에서 수동 실행(Run workflow)하면 Linux 러너에서 .NET Framework 4.8 exe 를 빌드하고
+# 실행한 커밋에 태그를 만들어 릴리스에 첨부한다. v* 태그를 푸시해도 같은 동작을 한다.
 # (net48 참조 어셈블리 패키지로 빌드하므로 Windows 러너가 필요 없음)
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '릴리스 태그 (비우면 src/NikkeChecker.csproj 의 <Version> 앞에 v 를 붙여 사용)'
+        required: false
+        default: ''
   push:
     tags: ['v*']
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,6 +21,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+          elif [ -n "$INPUT_VERSION" ]; then
+            TAG="$INPUT_VERSION"
+          else
+            TAG="v$(grep -oP '(?<=<Version>)[^<]+' src/NikkeChecker.csproj)"
+          fi
+          case "$TAG" in v*) ;; *) TAG="v$TAG" ;; esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "릴리스 태그: $TAG"
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -35,11 +57,11 @@ jobs:
           path: NikkeChecker.exe
 
       - name: Create release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.tag.outputs.tag }}
           SHA256: ${{ steps.sum.outputs.sha256 }}
         run: |
           printf 'NIKKE PC 런처 감염 점검 도구 %s\n\n`NikkeChecker.exe` 를 내려받아 실행하세요. (Windows 10/11, 설치 불필요)\n\nSHA-256: `%s`\n' "$TAG" "$SHA256" > notes.md
-          gh release create "$TAG" NikkeChecker.exe --title "$TAG" --notes-file notes.md
+          # 태그가 없으면 실행한 커밋(GITHUB_SHA)에 새로 만든다.
+          gh release create "$TAG" NikkeChecker.exe --title "$TAG" --notes-file notes.md --target "$GITHUB_SHA"
