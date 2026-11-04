@@ -25,10 +25,3 @@ cd src
 dotnet build -c Release
 ```
 결과물: `src/bin/Release/net48/NikkeChecker.exe`
-
-## 릴리스
-`v*` 태그를 푸시하면 GitHub Actions 가 Windows 에서 빌드하고 exe 를 릴리스에 첨부합니다.
-```
-git tag v1.0.1
-git push origin v1.0.1
-```
