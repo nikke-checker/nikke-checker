@@ -65,9 +65,9 @@ namespace NikkeChecker
         }
 
         private Finding Add(CheckId check, Severity sev, string title, IEnumerable<string> evidence = null,
-            FixKind fix = FixKind.None, string target = null, int pid = 0, string browser = null)
+            FixKind fix = FixKind.None, string target = null, int pid = 0, string browser = null, string hint = null)
         {
-            var f = new Finding { Check = check, Severity = sev, Title = title, Fix = fix, Target = target, Pid = pid, Browser = browser };
+            var f = new Finding { Check = check, Severity = sev, Title = title, Fix = fix, Target = target, Pid = pid, Browser = browser, BrowserHint = hint };
             if (evidence != null) f.Evidence.AddRange(evidence);
             _r.Findings.Add(f);
             string tag = sev == Severity.Critical ? "[!!] 감염" : sev == Severity.Warning ? "[!] 노출" : "[i]";
@@ -159,14 +159,14 @@ namespace NikkeChecker
                     var ev = new List<string>();
                     if (dlls.Count > 0) ev.AddRange(dlls.Select(f => $"{f} ({FileUtil.Size(f):N0} bytes, 생성 {FileUtil.Created(f):yyyy-MM-dd HH:mm:ss})"));
                     else ev.Add("DLL 은 없지만 64자리 폴더가 남아 있습니다 (DLL 이 이미 지워졌을 수 있음)");
-                    Add(CheckId.BrowserDll, Severity.Critical, $"{b.Name} 지속성 설치됨: {d}", ev, FixKind.DeleteDirectory, d, browser: b.Process);
+                    Add(CheckId.BrowserDll, Severity.Critical, $"{b.Name} 지속성 설치됨: {d}", ev, FixKind.DeleteDirectory, d, browser: b.Process, hint: b.Hint);
                 }
                 // 64자리 폴더 밖에 있는 DLL
                 foreach (var f in FileUtil.Files(peh, 8).Where(f => Path.GetFileName(f).Equals(Iocs.DllName, StringComparison.OrdinalIgnoreCase)))
                 {
                     if (hexDirs.Any(d => f.StartsWith(d + "\\", StringComparison.OrdinalIgnoreCase))) continue;
                     any = true;
-                    Add(CheckId.BrowserDll, Severity.Critical, $"{b.Name} 지속성 DLL: {f}", null, FixKind.DeleteFile, f, browser: b.Process);
+                    Add(CheckId.BrowserDll, Severity.Critical, $"{b.Name} 지속성 DLL: {f}", null, FixKind.DeleteFile, f, browser: b.Process, hint: b.Hint);
                 }
                 if (!any) _log($"  [-] {b.Name}: PlatformExperienceHelper 정상 (브라우저 자체 파일만 있음)", LogLevel.Detail);
             }
@@ -519,8 +519,16 @@ namespace NikkeChecker
                 }
                 if (lower.StartsWith(Iocs.DllName) || (lower == "old-clsid.txt" && h.IndexOf("\\PlatformExperienceHelper\\", StringComparison.OrdinalIgnoreCase) >= 0))
                     Add(CheckId.FullScan, Severity.Critical, $"지속성 DLL 파일 (다른 위치): {h}", null, FileUtil.IsUnderUserProfile(h) ? FixKind.DeleteFile : FixKind.None, h);
-                else if (lower == "insight.bundle")
-                    Add(CheckId.FullScan, Severity.Critical, $"내려받은 에이전트 파일 (insight.bundle): {h}", null, FixKind.DeleteFile, h);
+                else if (lower == "insight.bundle" || leaf == "k2f.lua")
+                {
+                    // 이름만으로 지우지 않는다: 내용이 LuaJIT 바이트코드일 때만 에이전트로 보고 삭제 대상
+                    var head = FileUtil.Read(h, 3);
+                    if (head == null) { _r.Unreadable.Add(h); continue; }
+                    if (FileUtil.IsLuaJit(head))
+                        Add(CheckId.FullScan, Severity.Critical, $"내려받은 에이전트 파일 ({leaf}, LuaJIT 바이트코드): {h}", null, FixKind.DeleteFile, h);
+                    else
+                        Add(CheckId.FullScan, Severity.Info, $"이름만 일치하는 파일 (내용은 에이전트가 아님, 직접 확인): {h}");
+                }
                 else if (lower.StartsWith("tinyget"))
                 {
                     var head = FileUtil.Read(h, 3);
@@ -528,8 +536,9 @@ namespace NikkeChecker
                     if (FileUtil.IsLuaJit(head))
                         Add(CheckId.FullScan, Severity.Critical, $"에이전트 파일 (LuaJIT 바이트코드, 다른 위치): {h}", null, FixKind.DeleteFile, h);
                 }
-                else if (Regex.IsMatch(leaf, @"^k2f(\.lua$|-bcreds|_screen|\.agent)"))
-                    Add(CheckId.FullScan, Severity.Critical, $"에이전트 관련 파일 (다른 위치): {h}", null, FixKind.DeleteFile, h);
+                else if (Regex.IsMatch(leaf, @"^k2f(-bcreds|_screen|\.agent)"))
+                    // 임시 폴더 안의 것은 5번 항목이 삭제한다. 그 밖(연구용 샘플 폴더 등)은 보고만 하고 지우지 않는다.
+                    Add(CheckId.FullScan, Severity.Critical, $"에이전트 관련 파일 (임시 폴더 밖, 자동 삭제 안 함 — 직접 확인): {h}", null, FixKind.None, h);
             }
         }
 

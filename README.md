@@ -10,12 +10,12 @@
 
 | # | 항목 | 감염(●) | 노출(▲) |
 |---|---|---|---|
-| 1 | 브라우저 지속성 DLL | Chrome·Edge·Brave·Vivaldi·Opera·Opera GX·Chromium `User Data\PlatformExperienceHelper` 의 64자리 폴더(DLL 이 없어도) 또는 `platform_experience_helper.dll`, 구버전 `Chrome\Application\PlatformExperienceHelper` 의 `platform_experience_helper.dll(.old)`·`old-clsid.txt` | |
+| 1 | 브라우저 지속성 DLL | Chromium 계열 14종(Chrome·Edge·Brave·Vivaldi·Opera·Opera GX·Chromium·네이버 웨일·Arc·Yandex·Cốc Cốc·Comodo Dragon·Thorium·Epic) `User Data\PlatformExperienceHelper` 의 64자리 폴더(DLL 이 없어도) 또는 `platform_experience_helper.dll`, 구버전 `Chrome\Application\PlatformExperienceHelper` 의 `platform_experience_helper.dll(.old)`·`old-clsid.txt` | |
 | 2 | 레지스트리 CLSID | `HKCU\Software\Classes\(WOW6432Node\)CLSID\{E77CC89B-7401-4C04-8CED-149DB35ADD04}` (DLL 경로 또는 빈 잔여 키)와 그 키가 가리키는 DLL 파일, 64자리 폴더 DLL 을 가리키는 변종 CLSID | |
 | 3 | 실행 중 프로세스 | `nikke_launcher*` 실행 중, `platform_experience_helper*` 모듈이 로드된 프로세스 | |
 | 4 | 런처 데이터 `%APPDATA%\nikke_launcher(_hmt)` | `k2f.agent` / `k2f_chan`, HSTS(`TransportSecurity`)·`Network Persistent State` 의 analytics.insightjs.com | `Cache`/`Code Cache` 의 insightjs, HSTS 의 insightjs.com/org, `Reporting and NEL` |
 | 5 | 임시 폴더 | `k2f-bcreds-*`(탈취한 자격 증명), `k2f_screen_*.jpg`(화면 캡처) — 이름이 `k2f-`·`k2f_`·`k2f.` 로 시작하는 것만 | |
-| 6 | 전체 드라이브 파일 이름 | 정해진 위치 밖의 `platform_experience_helper.dll*`, `insight.bundle`, LuaJIT 로 시작하는 `tinyget*`, `k2f.lua`·`k2f-bcreds*`·`k2f_screen*`·`k2f.agent*` (클라우드 드라이브·`\Windows`·정션 제외). 찾은 `nikke_launcher.exe` 는 설치 폴더 후보로 사용 | |
+| 6 | 전체 드라이브 파일 이름 | 정해진 위치 밖의 `platform_experience_helper.dll*`, LuaJIT 바이트코드로 시작하는 `insight.bundle`·`k2f.lua`·`tinyget*`, `k2f-bcreds*`·`k2f_screen*`·`k2f.agent*` (클라우드 드라이브·`\Windows`·정션 제외). 임시 폴더 밖의 `k2f-bcreds*` 등과 사용자 폴더 밖의 DLL 은 보고만 하고 자동 삭제하지 않음. 찾은 `nikke_launcher.exe` 는 설치 폴더 후보로 사용 | |
 | 7 | 니케 설치 폴더 | `debug.log` 의 `k2f_chan`·`agent started as`·`lua downloaded to`·`adopted/resuming <uuid>`·analytics.insightjs.com·insight.bundle, `Launcher\log` 의 insight.bundle 다운로드 기록, LuaJIT 바이트코드(`1B 4C 4A`) 또는 `k2f*` 에이전트 파일 | insightjs 만 있는 로그 |
 | 8 | 차단 상태 (참고) | hosts 의 세 도메인, 방화벽 규칙 내용(사용·아웃바운드·차단·두 IP) | |
 

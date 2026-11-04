@@ -65,9 +65,9 @@ namespace NikkeChecker
             // 3. DLL 을 로드한 프로세스 + 해당 브라우저 종료
             foreach (var f in fixes.Where(f => f.Fix == FixKind.KillProcess))
                 KillPid(f.Pid, f.Target, log);
-            var browsers = fixes.Where(f => (f.Fix == FixKind.DeleteDirectory || f.Fix == FixKind.DeleteFile) && f.Browser != null)
-                                .Select(f => f.Browser).Distinct().ToList();
-            if (browsers.Count > 0) KillByName(browsers, log);
+            foreach (var b in fixes.Where(f => (f.Fix == FixKind.DeleteDirectory || f.Fix == FixKind.DeleteFile) && f.Browser != null)
+                                   .Select(f => (f.Browser, f.BrowserHint)).Distinct())
+                KillBrowser(b.Browser, b.BrowserHint, log);
 
             // 4. DLL 폴더 / 파일
             foreach (var f in fixes.Where(f => f.Fix == FixKind.DeleteDirectory))
@@ -144,6 +144,24 @@ namespace NikkeChecker
             }
             log($"[X] {label} 삭제 실패 (사용 중): {dir}", LogLevel.Bad);
             return false;
+        }
+
+        /// <summary>브라우저 종료. hint 가 있으면 실행 파일 경로에 hint 가 들어 있는 프로세스만 (browser.exe 같은 흔한 이름 대비).</summary>
+        private static void KillBrowser(string name, string hint, Logger log)
+        {
+            foreach (var p in Process.GetProcessesByName(name))
+            {
+                using (p)
+                {
+                    if (hint != null)
+                    {
+                        string path = null;
+                        try { path = p.MainModule?.FileName; } catch { }
+                        if (path == null || path.IndexOf(hint, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    }
+                    Kill(p, log);
+                }
+            }
         }
 
         private static void KillByName(IEnumerable<string> names, Logger log)

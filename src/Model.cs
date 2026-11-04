@@ -35,6 +35,7 @@ namespace NikkeChecker
         public string Target;     // 경로 또는 HKCU 기준 레지스트리 키
         public int Pid;           // KillProcess
         public string Browser;    // DeleteDirectory: 종료할 브라우저 프로세스 이름
+        public string BrowserHint; // 프로세스 이름이 흔할 때(browser.exe) 실행 파일 경로에 들어 있어야 하는 문자열
 
         public string FixDescription
         {
@@ -158,15 +159,39 @@ namespace NikkeChecker
         };
 
         // (표시 이름, User Data 경로, 프로세스 이름) — PlatformExperienceHelper 지속성 점검 대상
-        public static (string Name, string Path, string Process)[] Browsers => new[]
+        // Chromium 계열 브라우저: (표시 이름, User Data 경로, 프로세스 이름, 실행 파일 경로 힌트)
+        // 프로세스 이름이 browser.exe 처럼 흔한 브라우저는 힌트가 경로에 들어 있는 프로세스만 종료한다.
+        public static List<(string Name, string Path, string Process, string Hint)> Browsers
         {
-            ("Chrome",   System.IO.Path.Combine(LocalAppData, @"Google\Chrome\User Data"), "chrome"),
-            ("Edge",     System.IO.Path.Combine(LocalAppData, @"Microsoft\Edge\User Data"), "msedge"),
-            ("Brave",    System.IO.Path.Combine(LocalAppData, @"BraveSoftware\Brave-Browser\User Data"), "brave"),
-            ("Vivaldi",  System.IO.Path.Combine(LocalAppData, @"Vivaldi\User Data"), "vivaldi"),
-            ("Opera",    System.IO.Path.Combine(AppData, @"Opera Software\Opera Stable"), "opera"),
-            ("Opera GX", System.IO.Path.Combine(AppData, @"Opera Software\Opera GX Stable"), "opera"),
-            ("Chromium", System.IO.Path.Combine(LocalAppData, @"Chromium\User Data"), "chromium"),
-        };
+            get
+            {
+                var list = new List<(string, string, string, string)>
+                {
+                    ("Chrome",        System.IO.Path.Combine(LocalAppData, @"Google\Chrome\User Data"), "chrome", null),
+                    ("Edge",          System.IO.Path.Combine(LocalAppData, @"Microsoft\Edge\User Data"), "msedge", null),
+                    ("Brave",         System.IO.Path.Combine(LocalAppData, @"BraveSoftware\Brave-Browser\User Data"), "brave", null),
+                    ("Vivaldi",       System.IO.Path.Combine(LocalAppData, @"Vivaldi\User Data"), "vivaldi", null),
+                    ("Opera",         System.IO.Path.Combine(AppData, @"Opera Software\Opera Stable"), "opera", null),
+                    ("Opera GX",      System.IO.Path.Combine(AppData, @"Opera Software\Opera GX Stable"), "opera", null),
+                    ("Chromium",      System.IO.Path.Combine(LocalAppData, @"Chromium\User Data"), "chromium", null),
+                    ("네이버 웨일",    System.IO.Path.Combine(LocalAppData, @"Naver\Naver Whale\User Data"), "whale", null),
+                    ("Yandex",        System.IO.Path.Combine(LocalAppData, @"Yandex\YandexBrowser\User Data"), "browser", @"\Yandex\"),
+                    ("Cốc Cốc",       System.IO.Path.Combine(LocalAppData, @"CocCoc\Browser\User Data"), "browser", @"\CocCoc\"),
+                    ("Comodo Dragon", System.IO.Path.Combine(LocalAppData, @"Comodo\Dragon\User Data"), "dragon", null),
+                    ("Thorium",       System.IO.Path.Combine(LocalAppData, @"Thorium\User Data"), "thorium", null),
+                    ("Epic",          System.IO.Path.Combine(LocalAppData, @"Epic Privacy Browser\User Data"), "epic", null),
+                };
+                // Arc 는 MSIX 패키지라 패키지 폴더 아래에 User Data 가 있다
+                try
+                {
+                    var packages = System.IO.Path.Combine(LocalAppData, "Packages");
+                    if (Directory.Exists(packages))
+                        foreach (var pkg in Directory.GetDirectories(packages, "TheBrowserCompany.Arc_*"))
+                            list.Add(("Arc", System.IO.Path.Combine(pkg, @"LocalCache\Local\Arc\User Data"), "arc", null));
+                }
+                catch { }
+                return list;
+            }
+        }
     }
 }
