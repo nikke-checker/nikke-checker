@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace NikkeChecker
 {
-    public enum CheckId { BrowserDll, Clsid, Processes, LauncherData, Temp, InstallLogs, Protection }
+    public enum CheckId { BrowserDll, Clsid, Processes, LauncherData, Temp, InstallLogs, FullScan, Protection }
 
     public enum Severity { Info, Warning, Critical }
 
@@ -67,6 +67,8 @@ namespace NikkeChecker
         public HashSet<CheckId> Checked = new HashSet<CheckId>();
         public List<string> Installs = new List<string>();
         public List<string> LauncherDataDirs = new List<string>();
+        public List<string> DiskLaunchers = new List<string>();   // 전체 드라이브 검사에서 찾은 설치 루트 후보
+        public List<string> Unreadable = new List<string>();      // 읽지 못해 검사가 불완전한 파일
         public string HkcuDllPath;
 
         public Severity? Worst(CheckId id)
@@ -135,6 +137,19 @@ namespace NikkeChecker
 
         public static string AppData => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         public static string LocalAppData => Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        public static string UserProfile => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        /// <summary>에이전트가 만드는 이름 형식(k2f-, k2f_, k2f.)만. 대소문자 구분 — K2F3A.tmp 같은 임의 이름 오탐 방지.</summary>
+        public static bool IsK2fName(string n) =>
+            n.StartsWith("k2f-", StringComparison.Ordinal) || n.StartsWith("k2f_", StringComparison.Ordinal) || n.StartsWith("k2f.", StringComparison.Ordinal);
+
+        /// <summary>전체 드라이브 검사에서 이름으로 모을 파일.</summary>
+        public static bool IsDiskScanName(string n)
+        {
+            if (IsK2fName(n)) return true;
+            var s = n.ToLowerInvariant();
+            return s.StartsWith("tinyget") || s == "nikke_launcher.exe" || s.StartsWith(DllName) || s == "old-clsid.txt" || s == "insight.bundle";
+        }
 
         public static string[] LauncherDataDirs => new[]
         {

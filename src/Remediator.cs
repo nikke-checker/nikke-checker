@@ -95,9 +95,30 @@ namespace NikkeChecker
         }
 
         // ------------------------------------------------------------------
+        /// <summary>상위 폴더 중 정션·심볼릭 링크가 있으면 엉뚱한 곳을 지울 수 있으므로 삭제를 거부한다.</summary>
+        private static bool ParentIsLink(string path, Logger log)
+        {
+            try
+            {
+                var parent = Path.GetDirectoryName(path);
+                while (!string.IsNullOrEmpty(parent) && Path.GetPathRoot(parent) != parent)
+                {
+                    if ((new DirectoryInfo(parent).Attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        log($"[!] 건너뜀 (상위 폴더가 연결 폴더라 직접 확인 필요: {parent}): {path}", LogLevel.Warn);
+                        return true;
+                    }
+                    parent = Path.GetDirectoryName(parent);
+                }
+                return false;
+            }
+            catch { log($"[!] 건너뜀 (상위 폴더 확인 실패): {path}", LogLevel.Warn); return true; }
+        }
+
         private static bool DeleteFile(string f, Logger log)
         {
             if (!File.Exists(f)) { log($"[-] 이미 없음: {f}", LogLevel.Detail); return true; }
+            if (ParentIsLink(f, log)) return false;
             for (int i = 0; i < 3; i++)
             {
                 try { File.SetAttributes(f, FileAttributes.Normal); File.Delete(f); } catch { Thread.Sleep(600); }
@@ -110,6 +131,7 @@ namespace NikkeChecker
         private static bool DeleteDir(string dir, string label, Logger log)
         {
             if (!Directory.Exists(dir)) { log($"[-] 이미 없음: {dir}", LogLevel.Detail); return true; }
+            if (ParentIsLink(dir, log)) return false;
             for (int i = 0; i < 3; i++)
             {
                 try
@@ -285,23 +307,9 @@ namespace NikkeChecker
                 log("    → 백신이 hosts 변경을 막았을 수 있습니다. 백신 알림을 확인해 주세요.", LogLevel.Warn);
             }
 
-            // hosts 는 IP 를 막을 수 없으므로 공격자 IP 는 방화벽으로 차단
-            var ips = string.Join(",", Iocs.C2Ips);
-            try
-            {
-                if (FirewallRuleExists(Iocs.FirewallRuleName))
-                    log($"[-] 방화벽: 차단 규칙이 이미 있습니다 ({ips})", LogLevel.Detail);
-                else if (Run("netsh", $"advfirewall firewall add rule name=\"{Iocs.FirewallRuleName}\" dir=out action=block remoteip={ips} enable=yes profile=any") == 0)
-                    log($"[+] 방화벽 아웃바운드 차단 등록: {ips}", LogLevel.Action);
-                else { failed++; log("[X] 방화벽 규칙 등록 실패 (Windows 방화벽 서비스 상태를 확인해 주세요)", LogLevel.Bad); }
-            }
-            catch (Exception ex) { failed++; log($"[X] 방화벽 규칙 등록 실패: {ex.Message}", LogLevel.Bad); }
+            // hosts 는 IP 를 막을 수 없으므로 공격자 IP 는 방화벽으로 차단 (규칙 내용까지 확인, 다르면 다시 만듦)
+            failed += Firewall.Ensure(log);
             return failed;
-        }
-
-        public static bool FirewallRuleExists(string name)
-        {
-            try { return Run("netsh", $"advfirewall firewall show rule name=\"{name}\"") == 0; } catch { return false; }
         }
 
         private static int Run(string exe, string args)

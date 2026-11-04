@@ -8,7 +8,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PlatformTarget>AnyCPU</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
-    <Version>1.1.2</Version>
+    <Version>1.2.0</Version>
     <Product>NIKKE PC 런처 감염 점검 도구</Product>
     <Description>NIKKE PC 런처 감염 점검 및 치료 도구</Description>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>

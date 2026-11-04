@@ -71,7 +71,8 @@ namespace NikkeChecker
             AddItem(t, CheckId.Processes,    "3. 실행 중 프로세스  (런처 실행 여부, 악성 DLL 이 로드된 프로그램)");
             AddItem(t, CheckId.LauncherData, "4. 런처 데이터  (k2f.agent, 악성 스크립트 캐시, HSTS·네트워크 접속 기록)");
             AddItem(t, CheckId.Temp,         "5. 임시 폴더  (k2f-bcreds-* 탈취 자격 증명, k2f_screen_* 화면 캡처)");
-            AddItem(t, CheckId.InstallLogs,  "6. 니케 설치 폴더  (debug.log 실행 기록, tinyget 다운로드 기록, 저장된 에이전트 파일)");
+            AddItem(t, CheckId.FullScan,     "6. 전체 드라이브 파일 이름 검사  (정해진 위치 밖의 에이전트·DLL 파일, 니케 설치 위치 — 수 분 걸릴 수 있음)");
+            AddItem(t, CheckId.InstallLogs,  "7. 니케 설치 폴더  (debug.log 실행 기록, tinyget 다운로드 기록, 저장된 에이전트 파일)");
 
             var pathRow = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3, Margin = new Padding(20, 0, 0, 0) };
             pathRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -90,7 +91,7 @@ namespace NikkeChecker
                 Text = "비워 두면 런처가 기록한 설치 경로를 찾고, 없으면 드라이브를 탐색합니다 (수 분 걸릴 수 있음)",
             });
 
-            AddItem(t, CheckId.Protection, "7. 차단 상태 확인  (hosts, 방화벽) ※ 참고용");
+            AddItem(t, CheckId.Protection, "8. 차단 상태 확인  (hosts, 방화벽 규칙 내용) ※ 참고용");
             _items.First(i => i.Id == CheckId.InstallLogs).Box.CheckedChanged += (s, e) => UpdateButtons();
 
             // ---- 조치 옵션 ----
@@ -250,11 +251,12 @@ namespace NikkeChecker
                         "1. 지금 런처를 닫고 이 PC 를 네트워크에서 분리하세요.",
                         "2. [조치 실행] 을 누르세요. 보고서가 바탕화면에 먼저 저장된 뒤 레지스트리 키 → 프로세스 → DLL → 런처 캐시 순으로 제거합니다.",
                         "3. DLL 이 사용 중이라 지워지지 않으면 Windows 를 재시작한 뒤 이 도구로 다시 점검·조치하세요.",
-                        "4. 깨끗한 기기(휴대폰 등)에서 비밀번호 변경: NIKKE/Level Infinite 계정 → 이메일, Discord, 은행, 브라우저에 저장된 모든 비밀번호.",
-                        "5. 해당 서비스에서 모든 세션 로그아웃 (탈취된 쿠키는 비밀번호 없이도 쓰일 수 있음). 이 PC 의 브라우저 쿠키도 브라우저 설정에서 삭제하세요.",
+                        "4. 깨끗한 기기(휴대폰 등)에서 비밀번호 변경: NIKKE/Level Infinite → 구글·네이버·카카오 → 디스코드·스팀 → 은행, 그리고 브라우저에 저장된 모든 비밀번호. 2단계 인증도 켜세요.",
+                        "5. 각 서비스에서 「모든 기기에서 로그아웃」 (탈취된 쿠키는 비밀번호 없이도 쓰일 수 있음). 이 PC 의 브라우저 쿠키도 브라우저 설정에서 삭제하세요.",
                         "6. 이 PC 에 저장된 API 토큰·SSH 키·클라우드 CLI 자격 증명(.ssh, .aws, gh 등)을 폐기하고 재발급하세요.",
                         "7. 암호화폐가 있다면 깨끗한 기기에서 만든 새 시드의 지갑으로 옮기세요.",
-                        "8. Level Infinite 가 수정을 확인할 때까지 NIKKE 런처를 열지 마세요. 가장 확실한 방법은 OS 재설치입니다.",
+                        "8. 안전하다는 공식 후속 공지가 나올 때까지 PC 런처를 켜지 마세요 (모바일 버전은 이번 사고와 무관). 가장 확실한 방법은 Windows 재설치입니다.",
+                        "9. 다른 Windows 사용자 계정도 이 PC 를 쓴다면, 그 계정으로 로그인해 이 도구를 한 번 더 실행하세요.",
                     });
                     break;
                 case Verdict.Exposed:
@@ -266,13 +268,14 @@ namespace NikkeChecker
                         "1. 니케 설치 폴더를 찾지 못했다면 경로를 지정해 다시 점검하세요. debug.log 에 에이전트 실행 기록이 있으면 '감염'으로 바뀝니다.",
                         "2. [조치 실행] 으로 런처 캐시(tbs_cache) 삭제와 hosts·방화벽 차단을 하세요.",
                         "3. 10월 23일 이후 런처를 연 적이 있다면 감염으로 간주하고 비밀번호 변경·세션 로그아웃·토큰 폐기를 하세요.",
-                        "4. Level Infinite 가 수정을 확인할 때까지 NIKKE 런처를 열지 마세요.",
+                        "4. 안전하다는 공식 후속 공지가 나올 때까지 PC 런처를 켜지 마세요 (모바일 버전은 이번 사고와 무관).",
                     });
                     break;
                 case Verdict.NotFound:
                     _summary.Text = "NIKKE 설치 폴더와 런처 데이터를 찾지 못했습니다.";
                     _summary.ForeColor = Color.DarkGoldenrod;
                     Log("[판정] NIKKE 를 찾지 못함: 다른 위치에 설치했다면 설치 경로를 지정해 다시 점검하세요.", LogLevel.Warn);
+                    Log("       런처를 이미 지웠다면 지난 실행 기록도 함께 지워져, 그동안 감염됐었는지는 알 수 없습니다.", LogLevel.Warn);
                     break;
                 default:
                     _summary.Text = "선택한 항목에서 악성 흔적이 발견되지 않았습니다. (흔적이 없다고 깨끗함이 보장되지는 않습니다)";
@@ -281,11 +284,17 @@ namespace NikkeChecker
                     Guide(new[]
                     {
                         "1. 런처를 다시 열기 전에 런처 캐시(tbs_cache)를 삭제하고 hosts·방화벽 차단을 하세요 ([조치 실행]).",
-                        "2. 10월 23일 이후 런처를 연 적이 있다면 깨끗한 기기에서 NIKKE/Level Infinite 비밀번호를 변경하세요.",
+                        "2. 9월 27일 이후 런처를 연 적이 있다면 중요한 비밀번호는 바꿔 두는 게 안전합니다 (10월 23일 이후라면 특히).",
+                        "3. 안전하다는 공식 후속 공지가 나올 때까지 PC 런처를 켜지 마세요.",
                     });
                     break;
             }
             if (nFix > 0) Log($"[조치 대상] {nFix}건 — [조치 실행] 으로 제거할 수 있습니다.", LogLevel.Info);
+            if (r.Unreadable.Count > 0)
+            {
+                Log($"[참고] 읽지 못해 검사가 불완전한 파일 {r.Unreadable.Count}개 (최대 50개 표시):", LogLevel.Warn);
+                foreach (var u in r.Unreadable.Distinct().Take(50)) Log("        " + u, LogLevel.Detail);
+            }
         }
 
         private void Guide(IEnumerable<string> lines)
@@ -316,7 +325,14 @@ namespace NikkeChecker
 
             var report = SaveReport(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
                 $"NikkeChecker_보고서_{DateTime.Now:yyyyMMdd_HHmmss}.txt"));
-            if (report != null) Log($"[+] 조치 전 보고서 저장: {report}", LogLevel.Action);
+            if (report == null)
+            {
+                // 증거가 남지 않은 채로 지우지 않는다
+                Log("[X] 보고서를 저장하지 못해 아무것도 바꾸지 않았습니다. 바탕화면 공간·권한을 확인한 뒤 다시 시도하세요.", LogLevel.Bad);
+                MessageBox.Show(this, "보고서를 저장하지 못해 조치를 취소했습니다.\n\n바탕화면의 공간과 권한을 확인한 뒤 다시 시도해 주세요.", "조치 취소", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            Log($"[+] 조치 전 보고서 저장: {report}", LogLevel.Action);
 
             _cts = new CancellationTokenSource();
             UpdateButtons();
@@ -386,8 +402,14 @@ namespace NikkeChecker
 
         private string SaveReport(string path)
         {
-            try { File.WriteAllText(path, _logBox.Text.Replace("\r\n", "\n").Replace("\n", "\r\n"), new UTF8Encoding(true)); return path; }
-            catch (Exception ex) { Log($"[X] 보고서 저장 실패: {ex.Message}", LogLevel.Bad); return null; }
+            var text = _logBox.Text.Replace("\r\n", "\n").Replace("\n", "\r\n");
+            // 바탕화면에 못 쓰면 사용자 폴더에 저장
+            foreach (var p in new[] { path, Path.Combine(Iocs.UserProfile, Path.GetFileName(path)) })
+            {
+                try { File.WriteAllText(p, text, new UTF8Encoding(true)); return p; }
+                catch (Exception ex) { Log($"[X] 보고서 저장 실패 ({p}): {ex.Message}", LogLevel.Bad); }
+            }
+            return null;
         }
 
         private void SaveLogDialog()

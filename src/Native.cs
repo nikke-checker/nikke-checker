@@ -41,6 +41,70 @@ namespace NikkeChecker
         [DllImport("kernel32.dll")]
         private static extern uint SetErrorMode(uint mode);
 
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WIN32_FIND_DATAW
+        {
+            public uint dwFileAttributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+            public uint nFileSizeHigh, nFileSizeLow, dwReserved0, dwReserved1;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string cFileName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)] public string cAlternateFileName;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr FindFirstFileExW(string name, int infoLevel, out WIN32_FIND_DATAW data, int searchOp, IntPtr filter, int flags);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool FindNextFileW(IntPtr h, out WIN32_FIND_DATAW data);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool FindClose(IntPtr h);
+
+        /// <summary>
+        /// 폴더 아래 모든 파일 이름을 빠르게 훑는다. 정션·심볼릭 링크 폴더는 따라가지 않는다.
+        /// 반환값: 확인한 파일 수.
+        /// </summary>
+        public static long WalkFileNames(string root, string[] skipDirs, Action<string, string> onFile,
+            System.Threading.CancellationToken ct, Action<long> progress)
+        {
+            const uint FILE_ATTRIBUTE_DIRECTORY = 0x10, FILE_ATTRIBUTE_REPARSE_POINT = 0x400;
+            const int FindExInfoBasic = 1, FIND_FIRST_EX_LARGE_FETCH = 2;
+            long files = 0;
+            var stack = new Stack<string>();
+            stack.Push(root.TrimEnd('\\'));
+            while (stack.Count > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                var dir = stack.Pop();
+                var h = FindFirstFileExW(@"\\?\" + dir + @"\*", FindExInfoBasic, out var fd, 0, IntPtr.Zero, FIND_FIRST_EX_LARGE_FETCH);
+                if (h == InvalidHandle) continue;
+                try
+                {
+                    do
+                    {
+                        var n = fd.cFileName;
+                        if (n == "." || n == "..") continue;
+                        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+                        {
+                            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) continue;
+                            var sub = dir + "\\" + n;
+                            bool skip = false;
+                            foreach (var s in skipDirs) if (string.Equals(sub, s, StringComparison.OrdinalIgnoreCase)) { skip = true; break; }
+                            if (!skip) stack.Push(sub);
+                        }
+                        else
+                        {
+                            files++;
+                            onFile(dir, n);
+                            if ((files & 0xFFF) == 0) progress?.Invoke(files);
+                        }
+                    } while (FindNextFileW(h, out fd));
+                }
+                finally { FindClose(h); }
+            }
+            return files;
+        }
+
         /// <summary>빈 카드 리더/광학 드라이브 접근 시 "디스크 없음" 대화상자가 뜨지 않게 한다.</summary>
         public static void SuppressDriveErrorDialogs()
         {

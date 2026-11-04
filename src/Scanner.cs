@@ -28,6 +28,7 @@ namespace NikkeChecker
             (CheckId.Processes,    "실행 중인 런처 / 악성 DLL 로드 여부"),
             (CheckId.LauncherData, "런처 데이터 폴더 (k2f.agent, insightjs 캐시, HSTS·네트워크 기록)"),
             (CheckId.Temp,         "임시 폴더 k2f 파일"),
+            (CheckId.FullScan,     "전체 드라이브 파일 이름 검사 (k2f*, insight.bundle, tinyget*, platform_experience_helper.dll)"),
             (CheckId.InstallLogs,  "니케 설치 폴더 로그 / 저장된 에이전트 파일"),
             (CheckId.Protection,   "차단 상태 (hosts / 방화벽)"),
         };
@@ -50,12 +51,16 @@ namespace NikkeChecker
                     case CheckId.Processes: CheckProcesses(); break;
                     case CheckId.LauncherData: CheckLauncherData(); break;
                     case CheckId.Temp: CheckTemp(); break;
+                    case CheckId.FullScan: CheckFullScan(); break;
                     case CheckId.InstallLogs: CheckInstalls(opt.InstallPath); break;
                     case CheckId.Protection: CheckProtection(); break;
                 }
                 if (!_r.Findings.Skip(before).Any(f => f.Severity != Severity.Info) && !_r.Unknown.ContainsKey(id))
                     _log("  [-] 악성 흔적 없음", LogLevel.Ok);
             }
+            DedupeFullScan();
+            if (_r.Unreadable.Count > 0)
+                _log($"  ※ 읽지 못해 검사가 불완전한 파일 {_r.Unreadable.Count}개 (보고서 끝에 목록)", LogLevel.Warn);
             return _r;
         }
 
@@ -89,6 +94,12 @@ namespace NikkeChecker
                         _r.HkcuDllPath = _r.HkcuDllPath ?? expanded;
                         Add(CheckId.Clsid, Severity.Critical, $"레지스트리 지속성 (CLSID 하이재킹): HKCU\\{key}",
                             new[] { "InprocServer32 = " + val }, FixKind.DeleteRegistryKey, key);
+                        // 키가 가리키는 파일이 정확히 그 DLL 이름의 "파일"일 때만 삭제 대상 (다른 파일을 지우게 유도당하지 않도록)
+                        var leaf = Path.GetFileName(expanded);
+                        if ((leaf.Equals(Iocs.DllName, StringComparison.OrdinalIgnoreCase) || leaf.Equals(Iocs.DllName + ".old", StringComparison.OrdinalIgnoreCase))
+                            && File.Exists(expanded))
+                            Add(CheckId.Clsid, Severity.Critical, $"레지스트리가 가리키는 지속성 DLL: {expanded}", null,
+                                FileUtil.IsUnderUserProfile(expanded) ? FixKind.DeleteFile : FixKind.None, expanded, browser: "chrome");
                     }
                     else
                     {
@@ -187,9 +198,8 @@ namespace NikkeChecker
         // ------------------------------------------------------------------
         private void CheckProcesses()
         {
-            foreach (var name in new[] { "nikke_launcher", "nikke_launcher_google" })
+            foreach (var p in Process.GetProcesses().Where(x => x.ProcessName.StartsWith("nikke_launcher", StringComparison.OrdinalIgnoreCase)))
             {
-                foreach (var p in Process.GetProcessesByName(name))
                 {
                     using (p)
                         Add(CheckId.Processes, Severity.Critical, $"런처가 실행 중: {p.ProcessName}.exe (PID {p.Id}) — 즉시 종료해야 합니다",
@@ -209,6 +219,7 @@ namespace NikkeChecker
                     foreach (var m in mods)
                     {
                         bool hit = Iocs.LoadedDllPath.IsMatch(m) ||
+                                   Path.GetFileName(m).StartsWith("platform_experience_helper", StringComparison.OrdinalIgnoreCase) ||
                                    (_r.HkcuDllPath != null && string.Equals(m, _r.HkcuDllPath, StringComparison.OrdinalIgnoreCase));
                         if (!hit) continue;
                         bool isExplorer = p.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase);
@@ -241,7 +252,7 @@ namespace NikkeChecker
                 {
                     _ct.ThrowIfCancellationRequested();
                     var data = FileUtil.Read(f, MaxFileBytes);
-                    if (data == null) continue;
+                    if (data == null) { _r.Unreadable.Add(f); continue; }
                     count++;
                     var name = Path.GetFileName(f);
                     var rel = f.Substring(dir.Length).TrimStart('\\');
@@ -337,7 +348,7 @@ namespace NikkeChecker
                 foreach (var f in FileUtil.Files(dir, 0))
                 {
                     var name = Path.GetFileName(f);
-                    if (name.StartsWith("k2f", StringComparison.OrdinalIgnoreCase))
+                    if (Iocs.IsK2fName(name))
                     {
                         string kind = name.StartsWith("k2f-bcreds", StringComparison.OrdinalIgnoreCase) ? "수집된 브라우저 자격 증명"
                                     : name.StartsWith("k2f_screen", StringComparison.OrdinalIgnoreCase) ? "화면 캡처" : "에이전트 임시 파일";
@@ -361,10 +372,11 @@ namespace NikkeChecker
         // ------------------------------------------------------------------
         private void CheckInstalls(string userPath)
         {
-            var installs = InstallLocator.Find(userPath, _ct, m => _log("  " + m, LogLevel.Detail));
+            var installs = InstallLocator.Find(userPath, _r.DiskLaunchers, _ct, m => _log("  " + m, LogLevel.Detail));
             if (installs.Count == 0)
             {
                 _log("  [?] 니케 설치 폴더를 찾지 못했습니다. 경로를 직접 지정해 주세요.", LogLevel.Warn);
+                _log("      (런처를 이미 지웠다면 지난 실행 기록도 함께 지워져, 그동안 감염됐었는지는 이 항목으로 알 수 없습니다)", LogLevel.Detail);
                 _r.Unknown[CheckId.InstallLogs] = true;
                 return;
             }
@@ -380,6 +392,8 @@ namespace NikkeChecker
             }
         }
 
+        // 에이전트 등록 기록: "adopted <uuid>" / "resuming <uuid>"
+        private static readonly Regex AgentIdLine = new Regex(@"(adopted|resuming) [0-9a-f]{8}-[0-9a-f]{4}-", RegexOptions.IgnoreCase);
         private static readonly Regex RunLine = new Regex(@"k2f_chan registered|adopted \S+|resuming \S+|agent started as|lua downloaded to", RegexOptions.IgnoreCase);
 
         private void CheckDebugLog(string path)
@@ -398,13 +412,16 @@ namespace NikkeChecker
             {
                 no++;
                 var line = raw.Length > 65536 ? raw.Substring(0, 65536) : raw;
-                if (line.IndexOf("k2f_chan", StringComparison.OrdinalIgnoreCase) >= 0) k2f = true;
+                if (line.IndexOf("k2f_chan", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    line.IndexOf("agent started as", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    line.IndexOf("lua downloaded to", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    AgentIdLine.IsMatch(line)) k2f = true;
                 if (line.IndexOf("analytics.insightjs.com", StringComparison.OrdinalIgnoreCase) >= 0 ||
                     line.IndexOf("insight.bundle", StringComparison.OrdinalIgnoreCase) >= 0) server = true;
                 else if (line.IndexOf("insightjs", StringComparison.OrdinalIgnoreCase) >= 0) loader = true;
                 if (RunLine.IsMatch(line)) runs.Add($"[{no}행] {FileUtil.Trunc(line)}");
             }
-            if (k2f) Add(CheckId.InstallLogs, Severity.Critical, $"debug.log: 에이전트가 실행됨 (k2f_chan) — 실행 기록 {runs.Count}줄", runs.Take(50));
+            if (k2f) Add(CheckId.InstallLogs, Severity.Critical, $"debug.log: 에이전트가 실행됨 (k2f_chan / adopted / agent started as) — 실행 기록 {runs.Count}줄", runs.Take(50));
             if (server) Add(CheckId.InstallLogs, Severity.Critical, "debug.log: 런처가 에이전트 배포 서버에 요청함 (analytics.insightjs.com / insight.bundle)");
             if (loader && !server && !k2f) Add(CheckId.InstallLogs, Severity.Warning, "debug.log: 악성 로더(insightjs)만 실행됨");
             if (runs.Count > 50) _log($"        … 외 {runs.Count - 50}줄", LogLevel.Detail);
@@ -420,12 +437,12 @@ namespace NikkeChecker
             {
                 _ct.ThrowIfCancellationRequested();
                 var data = FileUtil.Read(f, MaxFileBytes);
-                if (data == null) continue;
+                if (data == null) { _r.Unreadable.Add(f); continue; }
                 var rel = f.Substring(logDir.Length).TrimStart('\\');
 
-                if (data.Length >= 3 && data[0] == 0x1B && data[1] == 0x4C && data[2] == 0x4A)
+                if (FileUtil.IsLuaJit(data) || Iocs.IsK2fName(Path.GetFileName(f)))
                 {
-                    Add(CheckId.InstallLogs, Severity.Critical, $"내려받은 에이전트 파일 (LuaJIT 바이트코드): {f}",
+                    Add(CheckId.InstallLogs, Severity.Critical, $"내려받은 에이전트 파일 ({(FileUtil.IsLuaJit(data) ? "LuaJIT 바이트코드" : "k2f 파일")}): {f}",
                         new[] { $"{data.Length:N0} bytes" + (data.Length == Iocs.KnownAgentSize ? " (알려진 에이전트와 같은 크기)" : "") + $", 생성 {FileUtil.Created(f):yyyy-MM-dd HH:mm:ss}" },
                         FixKind.DeleteFile, f);
                     continue;
@@ -459,6 +476,75 @@ namespace NikkeChecker
         }
 
         // ------------------------------------------------------------------
+        // 전체 드라이브 파일 이름 검사 (정해진 위치 밖에 남은 에이전트·지속성 파일)
+        // ------------------------------------------------------------------
+        private static readonly Regex CloudLabel = new Regex(@"Google Drive|OneDrive|Dropbox|pCloud|iCloud|MEGA|MYBOX|\bBox\b", RegexOptions.IgnoreCase);
+
+        private void CheckFullScan()
+        {
+            var hits = new List<string>();
+            foreach (var drive in DriveInfo.GetDrives())
+            {
+                _ct.ThrowIfCancellationRequested();
+                string label = "";
+                try
+                {
+                    if (!drive.IsReady || (drive.DriveType != DriveType.Fixed && drive.DriveType != DriveType.Removable)) continue;
+                    label = drive.VolumeLabel ?? "";
+                }
+                catch { continue; }
+                if (CloudLabel.IsMatch(label)) { _log($"  {drive.Name} 는 클라우드 드라이브({label})라 건너뜁니다", LogLevel.Detail); continue; }
+                var sw = Stopwatch.StartNew();
+                long last = 0;
+                var root = drive.RootDirectory.FullName.TrimEnd('\\');
+                long files = Native.WalkFileNames(root, new[] { root + "\\Windows" }, (dir, name) =>
+                {
+                    if (Iocs.IsDiskScanName(name)) lock (hits) hits.Add(dir + "\\" + name);
+                }, _ct, n =>
+                {
+                    if (sw.ElapsedMilliseconds - last >= 5000) { last = sw.ElapsedMilliseconds; _log($"  {root}\\ 검사 중… 파일 {n:N0}개", LogLevel.Detail); }
+                });
+                _log($"  {root}\\ 완료: 파일 {files:N0}개, {sw.Elapsed.TotalSeconds:N0}초", LogLevel.Detail);
+            }
+
+            foreach (var h in hits.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var leaf = Path.GetFileName(h);
+                var lower = leaf.ToLowerInvariant();
+                if (lower == "nikke_launcher.exe")
+                {
+                    var launcherDir = Path.GetDirectoryName(h);
+                    if (launcherDir != null) _r.DiskLaunchers.Add(Path.GetDirectoryName(launcherDir) ?? launcherDir);
+                    continue;
+                }
+                if (lower.StartsWith(Iocs.DllName) || (lower == "old-clsid.txt" && h.IndexOf("\\PlatformExperienceHelper\\", StringComparison.OrdinalIgnoreCase) >= 0))
+                    Add(CheckId.FullScan, Severity.Critical, $"지속성 DLL 파일 (다른 위치): {h}", null, FileUtil.IsUnderUserProfile(h) ? FixKind.DeleteFile : FixKind.None, h);
+                else if (lower == "insight.bundle")
+                    Add(CheckId.FullScan, Severity.Critical, $"내려받은 에이전트 파일 (insight.bundle): {h}", null, FixKind.DeleteFile, h);
+                else if (lower.StartsWith("tinyget"))
+                {
+                    var head = FileUtil.Read(h, 3);
+                    if (head == null) { _r.Unreadable.Add(h); continue; }
+                    if (FileUtil.IsLuaJit(head))
+                        Add(CheckId.FullScan, Severity.Critical, $"에이전트 파일 (LuaJIT 바이트코드, 다른 위치): {h}", null, FixKind.DeleteFile, h);
+                }
+                else if (Regex.IsMatch(leaf, @"^k2f(\.lua$|-bcreds|_screen|\.agent)"))
+                    Add(CheckId.FullScan, Severity.Critical, $"에이전트 관련 파일 (다른 위치): {h}", null, FixKind.DeleteFile, h);
+            }
+        }
+
+        /// <summary>다른 항목이 이미 잡은 경로(또는 그 아래)는 전체 드라이브 검사 결과에서 뺀다.</summary>
+        private void DedupeFullScan()
+        {
+            var others = _r.Findings.Where(f => f.Check != CheckId.FullScan && !string.IsNullOrEmpty(f.Target) &&
+                                                f.Fix != FixKind.DeleteRegistryKey && f.Fix != FixKind.KillProcess)
+                                    .Select(f => f.Target.TrimEnd('\\')).ToList();
+            _r.Findings.RemoveAll(f => f.Check == CheckId.FullScan && f.Target != null &&
+                others.Any(o => f.Target.Equals(o, StringComparison.OrdinalIgnoreCase) ||
+                                f.Target.StartsWith(o + "\\", StringComparison.OrdinalIgnoreCase)));
+        }
+
+        // ------------------------------------------------------------------
         // 7. 차단 상태 (판정에 영향 없음)
         // ------------------------------------------------------------------
         private void CheckProtection()
@@ -469,7 +555,7 @@ namespace NikkeChecker
             var ev = new List<string>();
             foreach (var d in Iocs.BlockDomains)
                 ev.Add($"hosts {d}: " + (text == null ? "확인 불가" : HostsFile.IsBlocked(text, d) ? "차단됨" : "차단 안 됨"));
-            bool fw = Remediator.FirewallRuleExists(Iocs.FirewallRuleName);
+            bool fw = Firewall.RuleIsValid();
             ev.Add($"방화벽 {string.Join(", ", Iocs.C2Ips)}: " + (fw ? "차단됨" : "차단 안 됨"));
             Add(CheckId.Protection, Severity.Info, "차단 상태 (조치 옵션의 'hosts·방화벽 차단'으로 등록 가능)", ev);
         }
@@ -494,13 +580,16 @@ namespace NikkeChecker
             return m.Success ? m.Groups[1].Value : null;
         }
 
-        public static List<string> Find(string userPath, CancellationToken ct, Action<string> log)
+        public static List<string> Find(string userPath, IEnumerable<string> diskCandidates, CancellationToken ct, Action<string> log)
         {
             var found = new List<string>();
             void Try(string root, string source)
             {
                 if (string.IsNullOrWhiteSpace(root)) return;
                 root = root.Trim().Trim('"').TrimEnd('\\');
+                // Launcher 폴더 자체가 기록된 경우 상위 폴더가 설치 루트
+                if (!IsInstall(root) && Path.GetFileName(root).Equals("Launcher", StringComparison.OrdinalIgnoreCase))
+                    root = Path.GetDirectoryName(root);
                 if (!IsInstall(root) || found.Contains(root, StringComparer.OrdinalIgnoreCase)) return;
                 found.Add(root);
                 log($"설치 폴더 확인 ({source}): {root}");
@@ -510,19 +599,31 @@ namespace NikkeChecker
             if (!string.IsNullOrWhiteSpace(userPath) && found.Count == 0)
                 log("지정한 경로에서 Launcher\\nikke_launcher.exe 또는 debug.log 를 찾지 못했습니다. 자동 탐색합니다.");
 
-            // 런처가 기록한 설치 경로
-            const string uninstall = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\nikke_launcher";
+            // 런처가 기록한 설치 경로: Uninstall 아래 이름에 nikke 가 들어가거나 표시 이름이 NIKKE 인 모든 키
+            const string uninstallRoot = @"Software\Microsoft\Windows\CurrentVersion\Uninstall";
             foreach (var (hive, view) in new[] { (RegistryHive.CurrentUser, RegistryView.Default), (RegistryHive.LocalMachine, RegistryView.Registry64), (RegistryHive.LocalMachine, RegistryView.Registry32) })
             {
                 try
                 {
                     using (var b = RegistryKey.OpenBaseKey(hive, view))
-                    using (var k = b.OpenSubKey(uninstall))
+                    using (var root = b.OpenSubKey(uninstallRoot))
                     {
-                        if (k == null) continue;
-                        Try(k.GetValue("GameInstallPath") as string, "레지스트리 GameInstallPath");
-                        var u = k.GetValue("UninstallString") as string;
-                        if (!string.IsNullOrWhiteSpace(u)) Try(Path.GetDirectoryName(u.Trim().Trim('"')), "레지스트리 UninstallString");
+                        if (root == null) continue;
+                        foreach (var name in root.GetSubKeyNames())
+                        {
+                            using (var k = root.OpenSubKey(name))
+                            {
+                                if (k == null) continue;
+                                var display = k.GetValue("DisplayName") as string ?? "";
+                                if (name.IndexOf("nikke", StringComparison.OrdinalIgnoreCase) < 0 &&
+                                    display.IndexOf("NIKKE", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                                Try(k.GetValue("GameInstallPath") as string, "레지스트리 GameInstallPath");
+                                Try(k.GetValue("InstallLocation") as string, "레지스트리 InstallLocation");
+                                Try(RootFromValue(k.GetValue("DisplayIcon") as string), "레지스트리 DisplayIcon");
+                                var u = k.GetValue("UninstallString") as string;
+                                if (!string.IsNullOrWhiteSpace(u)) Try(Path.GetDirectoryName(u.Trim().Trim('"')), "레지스트리 UninstallString");
+                            }
+                        }
                     }
                 }
                 catch { }
@@ -546,6 +647,7 @@ namespace NikkeChecker
                 }
                 catch { }
             }
+            foreach (var c in diskCandidates ?? Enumerable.Empty<string>()) Try(c, "전체 드라이브 검사");
             if (found.Count > 0) return found;
 
             // 드라이브 탐색 (고정/이동식, 7단계, \Windows 제외, 정션 미추적)
@@ -684,6 +786,11 @@ namespace NikkeChecker
             if (ap >= 0) s = s.Substring(0, ap) + "…";
             return s.Length > max ? s.Substring(0, max) + "…" : s;
         }
+
+        public static bool IsLuaJit(byte[] d) => d != null && d.Length >= 3 && d[0] == 0x1B && d[1] == 0x4C && d[2] == 0x4A;
+
+        public static bool IsUnderUserProfile(string p) =>
+            p.StartsWith(Iocs.UserProfile.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
 
         public static long Size(string p) { try { return new FileInfo(p).Length; } catch { return -1; } }
         public static DateTime Created(string p) { try { return File.GetCreationTime(p); } catch { return DateTime.MinValue; } }
