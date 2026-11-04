@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using static NikkeChecker.I18n;
 
 namespace NikkeChecker
 {
-    public enum CheckId { BrowserDll, Clsid, Processes, LauncherData, Temp, InstallLogs, FullScan, Protection }
+    public enum CheckId { BrowserDll, Clsid, Processes, LauncherData, Temp, InstallLogs, FullScan, Autostart, Protection }
 
-    public enum Severity { Info, Warning, Critical }
+    // Review = 「확인 필요」(자동 실행 프로그램). 판정에는 영향이 없고, 사용자가 고른 것만 지운다.
+    public enum Severity { Info, Review, Warning, Critical }
 
     public enum LogLevel { Info, Header, Ok, Warn, Bad, Action, Detail }
 
@@ -36,6 +38,7 @@ namespace NikkeChecker
         public int Pid;           // KillProcess
         public string Browser;    // DeleteDirectory: 종료할 브라우저 프로세스 이름
         public string BrowserHint; // 프로세스 이름이 흔할 때(browser.exe) 실행 파일 경로에 들어 있어야 하는 문자열
+        public AutostartItem Auto;  // Autostart 항목
 
         public string FixDescription
         {
@@ -43,12 +46,12 @@ namespace NikkeChecker
             {
                 switch (Fix)
                 {
-                    case FixKind.DeleteDirectory: return "폴더 삭제: " + Target;
-                    case FixKind.DeleteFile: return "파일 삭제: " + Target;
-                    case FixKind.DeleteFileElevated: return "파일 삭제(관리자): " + Target;
-                    case FixKind.DeleteRegistryKey: return "레지스트리 키 삭제: HKCU\\" + Target;
-                    case FixKind.DeleteTbsCache: return "런처 캐시 삭제: " + Target;
-                    case FixKind.KillProcess: return $"프로세스 종료: {Target} (PID {Pid})";
+                    case FixKind.DeleteDirectory: return L("폴더 삭제: ", "Delete folder: ") + Target;
+                    case FixKind.DeleteFile: return L("파일 삭제: ", "Delete file: ") + Target;
+                    case FixKind.DeleteFileElevated: return L("파일 삭제(관리자): ", "Delete file (admin): ") + Target;
+                    case FixKind.DeleteRegistryKey: return L("레지스트리 키 삭제: HKCU\\", "Delete registry key: HKCU\\") + Target;
+                    case FixKind.DeleteTbsCache: return L("런처 캐시 삭제: ", "Delete launcher cache: ") + Target;
+                    case FixKind.KillProcess: return L($"프로세스 종료: {Target} (PID {Pid})", $"End process: {Target} (PID {Pid})");
                     default: return null;
                 }
             }
@@ -59,6 +62,7 @@ namespace NikkeChecker
     {
         public HashSet<CheckId> Checks = new HashSet<CheckId>();
         public string InstallPath;
+        public Func<List<AutostartItem>> AuditSystem;   // 관리자 권한으로 PC 전체 자동 실행을 읽는 함수 (null 이면 건너뜀)
     }
 
     public sealed class ScanResult
@@ -90,7 +94,8 @@ namespace NikkeChecker
             }
         }
 
-        public IEnumerable<Finding> Fixable => Findings.Where(f => f.Fix != FixKind.None && f.Severity != Severity.Info);
+        public IEnumerable<Finding> Fixable => Findings.Where(f => f.Fix != FixKind.None && (f.Severity == Severity.Warning || f.Severity == Severity.Critical));
+        public IEnumerable<AutostartItem> Review => Findings.Where(f => f.Auto != null).Select(f => f.Auto);
     }
 
     public delegate void Logger(string message, LogLevel level);
@@ -174,7 +179,7 @@ namespace NikkeChecker
                     ("Opera",         System.IO.Path.Combine(AppData, @"Opera Software\Opera Stable"), "opera", null),
                     ("Opera GX",      System.IO.Path.Combine(AppData, @"Opera Software\Opera GX Stable"), "opera", null),
                     ("Chromium",      System.IO.Path.Combine(LocalAppData, @"Chromium\User Data"), "chromium", null),
-                    ("네이버 웨일",    System.IO.Path.Combine(LocalAppData, @"Naver\Naver Whale\User Data"), "whale", null),
+                    (L("네이버 웨일", "Naver Whale"), System.IO.Path.Combine(LocalAppData, @"Naver\Naver Whale\User Data"), "whale", null),
                     ("Yandex",        System.IO.Path.Combine(LocalAppData, @"Yandex\YandexBrowser\User Data"), "browser", @"\Yandex\"),
                     ("Cốc Cốc",       System.IO.Path.Combine(LocalAppData, @"CocCoc\Browser\User Data"), "browser", @"\CocCoc\"),
                     ("Comodo Dragon", System.IO.Path.Combine(LocalAppData, @"Comodo\Dragon\User Data"), "dragon", null),

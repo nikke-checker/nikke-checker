@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Linq;
 using System.Reflection;
+using static NikkeChecker.I18n;
 
 namespace NikkeChecker
 {
@@ -51,12 +52,12 @@ namespace NikkeChecker
             {
                 var rules = Get(Policy(), "Rules");
                 var existing = FindRule(rules, Iocs.FirewallRuleName);
-                if (IsValid(existing)) { log($"[-] 방화벽: 차단 규칙이 이미 있습니다 ({ips})", LogLevel.Detail); return 0; }
+                if (IsValid(existing)) { log(L($"[-] 방화벽: 차단 규칙이 이미 있습니다 ({ips})", $"[-] Firewall: the block rule already exists ({ips})"), LogLevel.Detail); return 0; }
                 if (existing != null) Call(rules, "Remove", Iocs.FirewallRuleName);
 
                 var rule = Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FWRule", true));
                 Set(rule, "Name", Iocs.FirewallRuleName);
-                Set(rule, "Description", "NIKKE PC 런처 악성코드(insightjs) 서버 차단 — NikkeChecker");
+                Set(rule, "Description", "Blocks the NIKKE PC launcher malware (insightjs) servers - NikkeChecker");
                 Set(rule, "Direction", DirectionOut);
                 Set(rule, "Action", ActionBlock);
                 Set(rule, "RemoteAddresses", string.Join(",", Iocs.C2Ips));
@@ -66,15 +67,15 @@ namespace NikkeChecker
 
                 if (IsValid(FindRule(Get(Policy(), "Rules"), Iocs.FirewallRuleName)))
                 {
-                    log($"[+] 방화벽 아웃바운드 차단 등록·확인: {ips}", LogLevel.Action);
+                    log(L($"[+] 방화벽 아웃바운드 차단 등록·확인: {ips}", $"[+] Firewall outbound block added and verified: {ips}"), LogLevel.Action);
                     return 0;
                 }
-                log("[X] 방화벽 규칙을 만들었지만 확인에 실패했습니다", LogLevel.Bad);
+                log(L("[X] 방화벽 규칙을 만들었지만 확인에 실패했습니다", "[X] Created the firewall rule but could not verify it"), LogLevel.Bad);
                 return 1;
             }
             catch (Exception ex)
             {
-                log($"[X] 방화벽 규칙 등록 실패: {(ex is TargetInvocationException t && t.InnerException != null ? t.InnerException.Message : ex.Message)}", LogLevel.Bad);
+                log(L("[X] 방화벽 규칙 등록 실패: ", "[X] Could not add the firewall rule: ") + (ex is TargetInvocationException t && t.InnerException != null ? t.InnerException.Message : ex.Message), LogLevel.Bad);
                 return 1;
             }
         }

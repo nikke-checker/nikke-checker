@@ -57,19 +57,25 @@ jobs:
         id: sum
         run: |
           cp src/bin/Release/net48/NikkeChecker.exe NikkeChecker.exe
+          # 영어판: 같은 exe 를 이름만 _EN 으로 (파일 이름에 _EN 이 있으면 영어 화면으로 시작)
+          cp NikkeChecker.exe NikkeChecker_EN.exe
           echo "sha256=$(sha256sum NikkeChecker.exe | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
         if: steps.tag.outputs.skip != 'true'
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: NikkeChecker.exe
+          subject-path: |
+            NikkeChecker.exe
+            NikkeChecker_EN.exe
 
       - uses: actions/upload-artifact@v4
         if: steps.tag.outputs.skip != 'true'
         with:
           name: NikkeChecker
-          path: NikkeChecker.exe
+          path: |
+            NikkeChecker.exe
+            NikkeChecker_EN.exe
 
       - name: Create release
         if: steps.tag.outputs.skip != 'true'
@@ -82,16 +88,21 @@ jobs:
           NIKKE PC 런처 감염 점검 도구 $TAG
 
           \`NikkeChecker.exe\` 를 내려받아 실행하세요. (Windows 10/11, 설치 불필요)
+          영어 화면: \`NikkeChecker_EN.exe\` (같은 프로그램, 파일 이름만 다름). 프로그램 오른쪽 위에서도 언어를 바꿀 수 있습니다.
 
-          SHA-256: \`$SHA256\`
+          Download and run \`NikkeChecker_EN.exe\` for the English version (Windows 10/11, no install).
+          It is the same program as \`NikkeChecker.exe\`; the file name picks the language, and you can switch it at the top right.
 
-          ### 빌드 출처 검증
+          SHA-256: \`$SHA256\` (both files)
+
+          ### 빌드 출처 검증 / Verify the build
           이 exe 는 공개 소스에서 GitHub Actions 로 빌드되었고 빌드 출처 증명(artifact attestation)이 붙어 있습니다.
-          GitHub CLI 로 이 리포지토리의 Actions 가 빌드한 파일인지 확인할 수 있습니다.
+          The exe files were built from the public source by GitHub Actions and carry a build provenance attestation.
 
           \`\`\`
           gh attestation verify NikkeChecker.exe --repo nikke-checker/nikke-checker
+          gh attestation verify NikkeChecker_EN.exe --repo nikke-checker/nikke-checker
           \`\`\`
           EOF
           # 태그가 없으면 실행한 커밋(GITHUB_SHA)에 새로 만든다.
-          gh release create "$TAG" NikkeChecker.exe --title "$TAG" --notes-file notes.md --target "$GITHUB_SHA"
+          gh release create "$TAG" NikkeChecker.exe NikkeChecker_EN.exe --title "$TAG" --notes-file notes.md --target "$GITHUB_SHA"
