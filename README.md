@@ -1,6 +1,6 @@
 # NIKKE PC 런처 감염 점검 도구
 
-[Releases](https://github.com/lunaiz-corp/nikke-checker/releases/latest) 에서 `NikkeChecker.exe` 를 내려받아 실행합니다.
+[Releases](https://github.com/nikke-checker/nikke-checker/releases/latest) 에서 `NikkeChecker.exe` 를 내려받아 실행합니다.
 설치가 필요 없습니다 (Windows 10/11 기본 .NET Framework 4.8 사용).
 
 2026년 9월 27일 Level Infinite CDN 의 스크립트 4개가 변조되어, NIKKE PC 런처가 `insightjs.com/l.js` 를 불러왔습니다.
@@ -47,7 +47,14 @@
 cd src
 dotnet build -c Release
 ```
-결과물: `src/bin/Release/net48/NikkeChecker.exe`
+결과물: `src/bin/Release/net48/NikkeChecker.exe` (Linux 에서도 빌드됩니다)
+
+## 릴리스
+`v*` 태그를 푸시하면 GitHub Actions(ubuntu-latest)가 빌드해 릴리스에 exe 와 SHA-256 을 올립니다.
+```
+git tag v1.1.0
+git push origin v1.1.0
+```
 
 ## 참고
 진단 규칙(IoC, HSTS 키, 에이전트 빌드 ETag, 지갑 확장·인증 파일 목록)은 이 사고를 처음 분석한
