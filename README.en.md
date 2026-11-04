@@ -6,6 +6,14 @@ Download `NikkeChecker_EN.exe` from [Releases](https://github.com/nikke-checker/
 No install is needed (it uses .NET Framework 4.8, built into Windows 10/11).
 `NikkeChecker.exe` is the same program; it opens in Korean on Korean Windows. You can switch the language at the top right.
 
+> **Windows Defender false positive (v1.5.0)**
+> Microsoft Defender may flag v1.5.0 as `Trojan:Win32/Wacatac.B!ml`. This is a machine-learning verdict on a new unsigned exe, and it is being reported to Microsoft as a false positive.
+> We do not recommend turning Defender off or adding an exclusion while it is pending. You can check that your download is genuine:
+> - SHA-256: `c5a2c5816e23c80f1bbb9e9c0f3c6ac58039dbdebd9bd3d6920d1eac25c75c61` (`NikkeChecker.exe` and `NikkeChecker_EN.exe` are the same file)
+> - Build provenance: `gh attestation verify NikkeChecker_EN.exe --repo nikke-checker/nikke-checker` ([Verify the download](#verify-the-download))
+>
+> If it is still flagged after Microsoft updates the verdict, run `"%ProgramFiles%\Windows Defender\MpCmdRun.exe" -SignatureUpdate` from an administrator Command Prompt.
+
 On September 27, 2026, four scripts on Level Infinite's CDN were modified, and the NIKKE PC launcher loaded `insightjs.com/l.js`.
 From October 23, some launches also downloaded and ran a remote-access agent (`insight.bundle`).
 Level Infinite announced a fix on November 4, but how the attacker got into the CDN is still unknown.

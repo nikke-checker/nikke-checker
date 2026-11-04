@@ -7,6 +7,14 @@
 영어 화면은 `NikkeChecker_EN.exe` (같은 프로그램)이고, 프로그램 오른쪽 위에서도 언어를 바꿀 수 있습니다.
 한국어가 아닌 Windows 에서는 처음부터 영어로 열립니다.
 
+> **Windows Defender 오탐 안내 (v1.5.0)**
+> Microsoft Defender 가 v1.5.0 을 `Trojan:Win32/Wacatac.B!ml` 로 감지하는 경우가 있습니다. 서명 없는 새 exe 에 머신러닝 판정이 붙은 오탐이며, Microsoft 에 오탐 신고를 진행하고 있습니다.
+> 판정이 풀릴 때까지 Defender 를 끄거나 예외로 등록하라고 권하지 않습니다. 내려받은 파일이 진짜인지 아래로 확인할 수 있습니다.
+> - SHA-256: `c5a2c5816e23c80f1bbb9e9c0f3c6ac58039dbdebd9bd3d6920d1eac25c75c61` (`NikkeChecker.exe`, `NikkeChecker_EN.exe` 같은 파일)
+> - 빌드 출처 증명: `gh attestation verify NikkeChecker.exe --repo nikke-checker/nikke-checker` ([다운로드 확인](#릴리스))
+>
+> Microsoft 판정이 바뀐 뒤에도 감지되면, 관리자 명령 프롬프트에서 `"%ProgramFiles%\Windows Defender\MpCmdRun.exe" -SignatureUpdate` 로 정의를 새로 받아 주세요.
+
 2026년 9월 27일 Level Infinite CDN 의 스크립트 4개가 변조되어, NIKKE PC 런처가 `insightjs.com/l.js` 를 불러왔습니다.
 10월 23일부터는 일부 실행 시 원격 제어 에이전트(`insight.bundle`)가 내려받아져 실행되었습니다.
 Level Infinite 는 11월 4일 수정을 발표했지만, 공격자가 CDN 에 어떻게 접근했는지는 아직 알려지지 않았습니다.
