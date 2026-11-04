@@ -637,11 +637,12 @@ namespace NikkeChecker
             {
                 todo.Add((L("2단계 인증 켜기", "Turn on 2-step verification"), L("중요한 계정부터.", "Important accounts first.")));
                 todo.Add((L("코인 지갑 옮기기 (해당되면)", "Move crypto (if any)"), L("새 복구 문구로 만든 새 지갑으로.", "To a new wallet with a new recovery phrase.")));
-                todo.Add((L("개발자라면 키 새로 발급", "Developers: reissue keys"), L("GitHub·SSH·클라우드 토큰.", "GitHub, SSH and cloud tokens.")));
+                todo.Add((L("API 키·액세스 토큰 새로 발급", "Reissue API keys and access tokens"), L("이 PC에서 쓰거나 저장한 키·토큰 (GitHub·SSH·클라우드 등)은 폐기하고 새로 받으세요.", "Revoke and reissue any key or token used or saved on this PC (GitHub, SSH, cloud, ...).")));
+                todo.Add((L("백신 전체 검사", "Full antivirus scan"), L("백신을 최신으로 업데이트한 뒤 전체 검사와 Windows 보안 오프라인 검사를 하세요.", "Update your antivirus, then run a full scan and a Microsoft Defender offline scan.")));
                 todo.Add((L("다른 Windows 계정도 점검", "Check other Windows accounts"), L("이 PC를 쓰는 다른 계정으로 로그인해 한 번 더 실행하세요.", "Sign in to each other account on this PC and run this tool again.")));
             }
             else if (_lastVerdict != Verdict.Exposed)
-                todo = todo.Take(1).Select(t => (t.Item1, L("9월 27일 이후 런처를 켠 적이 있다면 중요한 비밀번호는 바꿔 두는 게 안전합니다.", "If you used the launcher after Sep 27, changing important passwords is the safe choice."))).ToList();
+                todo = todo.Take(1).Select(t => (t.Item1, L("9월 27일 15:41 이후 런처를 켠 적이 있다면 중요한 비밀번호는 바꿔 두는 게 안전합니다.", "If you used the launcher after Sep 27 15:41 (UTC+9), changing important passwords is the safe choice."))).ToList();
 
             body.Add(Heading(L("해야 할 일", "What to do next") ));
             body.Add(Muted(L("휴대폰 등 다른 기기에서 하세요. 이 프로그램이 대신할 수 없는 일입니다.", "Do these from another device such as your phone. This program cannot do them for you."), new Padding(0, 0, 0, 8)));

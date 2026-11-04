@@ -6,30 +6,25 @@ Download `NikkeChecker_EN.exe` from [Releases](https://github.com/nikke-checker/
 No install is needed (it uses .NET Framework 4.8, built into Windows 10/11).
 `NikkeChecker.exe` is the same program; it opens in Korean on Korean Windows. You can switch the language at the top right.
 
-> **Windows Defender false positive (v1.5.0)**
-> Microsoft Defender may flag v1.5.0 as `Trojan:Win32/Wacatac.B!ml`. This is a machine-learning verdict on a new unsigned exe, and it is being reported to Microsoft as a false positive.
-> We do not recommend turning Defender off or adding an exclusion while it is pending. You can check that your download is genuine:
-> - SHA-256: `c5a2c5816e23c80f1bbb9e9c0f3c6ac58039dbdebd9bd3d6920d1eac25c75c61` (`NikkeChecker.exe` and `NikkeChecker_EN.exe` are the same file)
-> - Build provenance: `gh attestation verify NikkeChecker_EN.exe --repo nikke-checker/nikke-checker` ([Verify the download](#verify-the-download))
->
-> If it is still flagged after Microsoft updates the verdict, run `"%ProgramFiles%\Windows Defender\MpCmdRun.exe" -SignatureUpdate` from an administrator Command Prompt.
-
 On September 27, 2026, four scripts on Level Infinite's CDN were modified, and the NIKKE PC launcher loaded `insightjs.com/l.js`.
 From October 23, some launches also downloaded and ran a remote-access agent (`insight.bundle`).
 Level Infinite announced a fix on November 4, but how the attacker got into the CDN is still unknown.
 Delete the launcher cache (`tbs_cache`) before opening the launcher again, and keep the blocks in place.
 
+**Official guide (November 4, Level Infinite)**: if you ran the Windows PC launcher at least once after September 27 15:41 (UTC+9), check your PC. The mobile version was not affected.
+The official PC client's security feature (ACE) can also check it. This tool covers every manual check in the official guide (`k2f_chan registered` in `debug.log`, the key under `HKCU\Software\Classes\CLSID`, 64-character folders that hold the DLL, the 205,135-byte file in `Launcher\log\tinyget`, `tbs_cache`).
+
 ## Checks (only the ticked ones run)
 
 | # | Check | Infected (●) | Exposed (▲) |
 |---|---|---|---|
-| 1 | Browser persistence DLL | In 14 Chromium browsers (Chrome, Edge, Brave, Vivaldi, Opera, Opera GX, Chromium, Naver Whale, Arc, Yandex, Cốc Cốc, Comodo Dragon, Thorium, Epic): a 64-hex folder under `User Data\PlatformExperienceHelper` (even without the DLL) or `platform_experience_helper.dll`; the older `platform_experience_helper.dll(.old)` and `old-clsid.txt` in `Chrome\Application\PlatformExperienceHelper` | |
-| 2 | Registry CLSID | `HKCU\Software\Classes\(WOW6432Node\)CLSID\{E77CC89B-7401-4C04-8CED-149DB35ADD04}` (DLL path or empty leftover) and the DLL file it names. A CLSID under another name counts too when its `InprocServer32` points into `PlatformExperienceHelper` or a browser `User Data` folder | |
+| 1 | Browser persistence DLL | In 14 Chromium browsers (Chrome, Edge, Brave, Vivaldi, Opera, Opera GX, Chromium, Naver Whale, Arc, Yandex, Cốc Cốc, Comodo Dragon, Thorium, Epic): a 64-hex folder under `User Data\PlatformExperienceHelper` that holds `platform_experience_helper.dll` (official rule; a 64-hex folder without the DLL is shown for reference and not deleted) or the DLL elsewhere in that folder; the older `platform_experience_helper.dll(.old)` and `old-clsid.txt` in `Chrome\Application\PlatformExperienceHelper` | |
+| 2 | Registry CLSID | `HKCU\Software\Classes\CLSID\{E77CC89B-7401-4C04-8CED-149DB35ADD04}` (DLL path or empty leftover) and the DLL file it names. A key with the same name exists in other places (official guide), so the `WOW6432Node` one counts and is deleted only when it points to the malicious location. A CLSID under another name counts too when its `InprocServer32` points into `PlatformExperienceHelper` or a browser `User Data` folder | |
 | 3 | Running processes | Processes with a `platform_experience_helper*` module loaded. A running launcher (`nikke_launcher*`) is critical only when the same scan found another sign of the agent; otherwise it is shown for reference | |
 | 4 | Launcher data `%APPDATA%\nikke_launcher(_hmt, _google)` and the launcher's login browser profile `%LOCALAPPDATA%\CEF\User Data` | `k2f.agent` / `k2f_chan` (also inside decompressed LevelDB `.ldb` tables); analytics.insightjs.com in HSTS (`TransportSecurity`) or `Network Persistent State` | insightjs in `Cache`/`Code Cache`; insightjs.com/org in HSTS; `Reporting and NEL` |
 | 5 | Temp folder | `k2f-bcreds-*` (stolen credentials), `k2f-keyscan-*` (collected keys), `k2f_screen_*` (screenshots) - only names starting with `k2f-`, `k2f_`, `k2f.` | |
 | 6 | File names on all drives | `platform_experience_helper.dll*` outside known places; `insight.bundle`, `k2f.lua`, `tinyget*` that start with LuaJIT bytecode; `k2f-bcreds*`, `k2f-keyscan*`, `k2f_screen*`, `k2f.agent*` (cloud drives, `\Windows` and junctions skipped). `k2f-*` files outside the temp folder and DLLs outside your profile are reported but not deleted automatically | |
-| 7 | NIKKE install folder | `k2f_chan`, `agent started as`, `lua downloaded to`, `adopted/resuming <uuid>`, analytics.insightjs.com or insight.bundle in `debug.log`; **finished** insight.bundle downloads in `Launcher\log`; agent files (LuaJIT bytecode `1B 4C 4A` or `k2f*`) | logs that name only insightjs; insight.bundle requests that never arrived (server did not answer) |
+| 7 | NIKKE install folder | `k2f_chan`, `agent started as`, `lua downloaded to`, `adopted/resuming <uuid>`, analytics.insightjs.com or insight.bundle in `debug.log`; **finished** insight.bundle downloads in `Launcher\log`; agent files (LuaJIT bytecode `1B 4C 4A` or `k2f*`); `Launcher\log\tinyget\tinyget.<date>-<time>.log` files disguised as logs with a known agent size (205,135 / 165,108 bytes) | logs that name only insightjs; insight.bundle requests that never arrived (server did not answer) |
 | 8 | Autostart programs (to check) | Autostart targets that are new since Sep 27 and have no publisher signature (file or catalog): Run/RunOnce (HKCU, HKLM), Startup folders, Task Scheduler, services (ServiceDll for svchost), WMI event consumers. Hidden PowerShell/mshta commands are marked high risk. Each file is scanned with Windows Defender. **No effect on the verdict** | |
 | 9 | Extra checks | **Programs connected to the hacker servers (89.127.233.127, 89.126.250.172) right now** | **DNS cache records of hacker addresses** |
 |   | (to check, no effect on the verdict) | Browsers running in remote-control mode (`--remote-debugging-*`, `--load-extension`) and such shortcuts, extensions force-installed by policy, risky Windows Defender exclusions (whole drives, AppData, Temp, executable extensions, ...), remote-access apps installed since Sep 27 or running (AnyDesk, TeamViewer, ...), proxy / auto-config (PAC), changed Winlogon Shell/Userinit, IFEO debuggers, AppInit_DLLs | |
@@ -52,7 +47,7 @@ The log is under Show details, and the report saves that log as is.
 
 ## Clean-up ([Clean up]: confirm, save the report to the Desktop, then run. Nothing is deleted if the report cannot be saved)
 
-1. Close the launcher
+1. Close the launcher and the game
 2. Delete the HKCU CLSID key (first, so browsers stop loading the DLL)
 3. End processes that loaded the DLL or are connected to the hacker servers (not Windows programs), and close the affected browser (not explorer.exe)
 4. Delete the 64-hex folder / DLL - if it is locked, you are told to **restart Windows and run again**

@@ -7,30 +7,25 @@
 영어 화면은 `NikkeChecker_EN.exe` (같은 프로그램)이고, 프로그램 오른쪽 위에서도 언어를 바꿀 수 있습니다.
 한국어가 아닌 Windows 에서는 처음부터 영어로 열립니다.
 
-> **Windows Defender 오탐 안내 (v1.5.0)**
-> Microsoft Defender 가 v1.5.0 을 `Trojan:Win32/Wacatac.B!ml` 로 감지하는 경우가 있습니다. 서명 없는 새 exe 에 머신러닝 판정이 붙은 오탐이며, Microsoft 에 오탐 신고를 진행하고 있습니다.
-> 판정이 풀릴 때까지 Defender 를 끄거나 예외로 등록하라고 권하지 않습니다. 내려받은 파일이 진짜인지 아래로 확인할 수 있습니다.
-> - SHA-256: `c5a2c5816e23c80f1bbb9e9c0f3c6ac58039dbdebd9bd3d6920d1eac25c75c61` (`NikkeChecker.exe`, `NikkeChecker_EN.exe` 같은 파일)
-> - 빌드 출처 증명: `gh attestation verify NikkeChecker.exe --repo nikke-checker/nikke-checker` ([다운로드 확인](#릴리스))
->
-> Microsoft 판정이 바뀐 뒤에도 감지되면, 관리자 명령 프롬프트에서 `"%ProgramFiles%\Windows Defender\MpCmdRun.exe" -SignatureUpdate` 로 정의를 새로 받아 주세요.
-
 2026년 9월 27일 Level Infinite CDN 의 스크립트 4개가 변조되어, NIKKE PC 런처가 `insightjs.com/l.js` 를 불러왔습니다.
 10월 23일부터는 일부 실행 시 원격 제어 에이전트(`insight.bundle`)가 내려받아져 실행되었습니다.
 Level Infinite 는 11월 4일 수정을 발표했지만, 공격자가 CDN 에 어떻게 접근했는지는 아직 알려지지 않았습니다.
 런처를 다시 열기 전에 런처 캐시(`tbs_cache`)를 지우고, 차단은 유지하세요.
 
+**공식 안내 (11월 4일, 레벨 인피니트)**: 9월 27일 15:41(UTC+9) 이후 Windows PC 런처를 한 번이라도 실행했다면 점검이 필요합니다. 모바일 버전은 영향이 없습니다.
+공식 PC 클라이언트의 보안 기능(ACE)으로도 점검할 수 있습니다. 이 도구는 공식 안내의 수동 점검 기준(`debug.log` 의 `k2f_chan registered`, `HKCU\Software\Classes\CLSID` 의 키, DLL 이 든 64자리 폴더, `Launcher\log\tinyget` 의 205,135 bytes 파일, `tbs_cache`)을 모두 포함합니다.
+
 ## 점검 항목 (체크한 항목만 점검)
 
 | # | 항목 | 감염(●) | 노출(▲) |
 |---|---|---|---|
-| 1 | 브라우저 지속성 DLL | Chromium 계열 14종(Chrome·Edge·Brave·Vivaldi·Opera·Opera GX·Chromium·네이버 웨일·Arc·Yandex·Cốc Cốc·Comodo Dragon·Thorium·Epic) `User Data\PlatformExperienceHelper` 의 64자리 폴더(DLL 이 없어도) 또는 `platform_experience_helper.dll`, 구버전 `Chrome\Application\PlatformExperienceHelper` 의 `platform_experience_helper.dll(.old)`·`old-clsid.txt` | |
-| 2 | 레지스트리 CLSID | `HKCU\Software\Classes\(WOW6432Node\)CLSID\{E77CC89B-7401-4C04-8CED-149DB35ADD04}` (DLL 경로 또는 빈 잔여 키)와 그 키가 가리키는 DLL 파일. 다른 이름의 CLSID 라도 `InprocServer32` 가 `PlatformExperienceHelper` 나 브라우저 `User Data` 를 가리키면 같은 수법으로 판정 | |
+| 1 | 브라우저 지속성 DLL | Chromium 계열 14종(Chrome·Edge·Brave·Vivaldi·Opera·Opera GX·Chromium·네이버 웨일·Arc·Yandex·Cốc Cốc·Comodo Dragon·Thorium·Epic) `User Data\PlatformExperienceHelper` 에서 `platform_experience_helper.dll` 이 든 64자리 폴더(공식 안내 기준. DLL 이 없는 64자리 폴더는 참고로만 표시하고 지우지 않음) 또는 그 밖의 `platform_experience_helper.dll`, 구버전 `Chrome\Application\PlatformExperienceHelper` 의 `platform_experience_helper.dll(.old)`·`old-clsid.txt` | |
+| 2 | 레지스트리 CLSID | `HKCU\Software\Classes\CLSID\{E77CC89B-7401-4C04-8CED-149DB35ADD04}` (DLL 경로 또는 빈 잔여 키)와 그 키가 가리키는 DLL 파일. 같은 이름의 키가 다른 경로에도 있으므로(공식 안내) `WOW6432Node` 쪽은 악성 위치를 가리킬 때만 판정·삭제. 다른 이름의 CLSID 라도 `InprocServer32` 가 `PlatformExperienceHelper` 나 브라우저 `User Data` 를 가리키면 같은 수법으로 판정 | |
 | 3 | 실행 중 프로세스 | `platform_experience_helper*` 모듈이 로드된 프로세스. 실행 중인 런처(`nikke_launcher*`)는 같은 점검에서 다른 감염 흔적이 있을 때만 감염, 없으면 참고 | |
 | 4 | 런처 데이터 `%APPDATA%\nikke_launcher(_hmt, _google)` 와 런처 로그인 브라우저 프로필 `%LOCALAPPDATA%\CEF\User Data` | `k2f.agent` / `k2f_chan` (압축된 LevelDB `.ldb` 테이블을 풀어서도 찾음), HSTS(`TransportSecurity`)·`Network Persistent State` 의 analytics.insightjs.com | `Cache`/`Code Cache` 의 insightjs, HSTS 의 insightjs.com/org, `Reporting and NEL` |
 | 5 | 임시 폴더 | `k2f-bcreds-*`(탈취한 자격 증명), `k2f-keyscan-*`(수집한 키·인증 파일), `k2f_screen_*`(화면 캡처) — 이름이 `k2f-`·`k2f_`·`k2f.` 로 시작하는 것만 | |
 | 6 | 전체 드라이브 파일 이름 | 정해진 위치 밖의 `platform_experience_helper.dll*`, LuaJIT 바이트코드로 시작하는 `insight.bundle`·`k2f.lua`·`tinyget*`, `k2f-bcreds*`·`k2f-keyscan*`·`k2f_screen*`·`k2f.agent*` (클라우드 드라이브·`\Windows`·정션 제외). 임시 폴더 밖의 `k2f-*` 와 사용자 폴더 밖의 DLL 은 보고만 하고 자동 삭제하지 않음. 찾은 `nikke_launcher.exe` 는 설치 폴더 후보로 사용 | |
-| 7 | 니케 설치 폴더 | `debug.log` 의 `k2f_chan`·`agent started as`·`lua downloaded to`·`adopted/resuming <uuid>`·analytics.insightjs.com·insight.bundle, `Launcher\log` 의 **끝까지 받아진** insight.bundle 다운로드 기록, LuaJIT 바이트코드(`1B 4C 4A`) 또는 `k2f*` 에이전트 파일 | insightjs 만 있는 로그, 받지 못한(서버 무응답) insight.bundle 요청 |
+| 7 | 니케 설치 폴더 | `debug.log` 의 `k2f_chan`·`agent started as`·`lua downloaded to`·`adopted/resuming <uuid>`·analytics.insightjs.com·insight.bundle, `Launcher\log` 의 **끝까지 받아진** insight.bundle 다운로드 기록, LuaJIT 바이트코드(`1B 4C 4A`) 또는 `k2f*` 에이전트 파일, 로그로 위장한 `Launcher\log\tinyget\tinyget.<날짜>-<시간>.log` 중 알려진 에이전트 크기(205,135 / 165,108 bytes)인 파일 | insightjs 만 있는 로그, 받지 못한(서버 무응답) insight.bundle 요청 |
 | 8 | 자동 실행 프로그램 (확인 필요) | 9월 27일 이후 생겼고 제작사 서명(파일·카탈로그)이 없는 자동 실행 대상: 자동 실행 목록(HKCU·HKLM Run/RunOnce), 시작 프로그램 폴더, 작업 스케줄러, 서비스(svchost 는 ServiceDll), WMI 이벤트 소비자. 숨겨진 PowerShell·mshta 명령은 위험 높음으로 표시. 각 파일을 Windows Defender 로 검사. **판정에는 영향 없음** | |
 | 9 | 추가 보안 점검 | **지금 해커 서버(89.127.233.127, 89.126.250.172)와 연결 중인 프로그램** | **해커 주소 DNS 캐시 기록** |
 |   | (확인 필요, 판정 영향 없음) | 원격 조종 모드(`--remote-debugging-*`, `--load-extension`)로 켜진 브라우저와 그런 바로가기, 정책으로 강제 설치되는 확장, 위험한 Windows Defender 검사 제외(드라이브 전체·AppData·Temp·실행 파일 확장자 등), 9/27 이후 설치되거나 실행 중인 원격 접속 프로그램(AnyDesk·TeamViewer 등), 프록시·자동 설정(PAC), Winlogon Shell·Userinit 변경, IFEO Debugger, AppInit_DLLs | |
@@ -55,7 +50,7 @@ PC 전체 범위(HKLM, 작업 스케줄러, 서비스, WMI, Defender 설정)는 
 
 ## 정리 ([정리하기], 확인 창 → 보고서를 바탕화면에 자동 저장 → 실행. 보고서를 저장하지 못하면 아무것도 지우지 않음)
 
-1. 런처 종료
+1. 런처와 게임 종료
 2. HKCU CLSID 키 삭제 (먼저 끊어야 브라우저가 DLL 을 다시 로드하지 않음)
 3. 악성 DLL 을 로드한 프로세스, 해커 서버와 연결 중인 프로그램(Windows 프로그램 제외), 해당 브라우저 종료 (explorer.exe 제외)
 4. 64자리 폴더 / DLL 삭제 — 잠겨 있으면 **Windows 재시작 후 다시 실행**하라고 안내

@@ -104,6 +104,18 @@ namespace NikkeChecker
                     if (k == null) continue;
                     string val;
                     using (var s = k.OpenSubKey("InprocServer32")) val = s?.GetValue("") as string;
+                    // 공식 안내 (레벨 인피니트, 11/4): 같은 이름의 키가 다른 경로에도 있으니 HKCU\Software\Classes\CLSID 의 것만 지운다.
+                    // WOW6432Node 쪽은 악성 위치(PlatformExperienceHelper / User Data)를 가리킬 때만 감염으로 보고 지운다.
+                    if (!key.StartsWith(Iocs.ClsidRoot + "\\", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var target = Environment.ExpandEnvironmentVariables((val ?? "").Trim().Trim('"'));
+                        if (string.IsNullOrWhiteSpace(val) || !Regex.IsMatch(target, @"\\PlatformExperienceHelper\\|\\User Data\\", RegexOptions.IgnoreCase))
+                        {
+                            Add(CheckId.Clsid, Severity.Info, L($"같은 이름의 키 (악성 위치를 가리키지 않아 지우지 않음): HKCU\\{key}", $"Key with the same name (does not point to the malicious location, not deleted): HKCU\\{key}"),
+                                new[] { "InprocServer32 = " + (string.IsNullOrWhiteSpace(val) ? L("(비어 있음)", "(empty)") : val) });
+                            continue;
+                        }
+                    }
                     if (!string.IsNullOrWhiteSpace(val))
                     {
                         var expanded = Environment.ExpandEnvironmentVariables(val.Trim().Trim('"'));
@@ -179,9 +191,14 @@ namespace NikkeChecker
                 {
                     any = true;
                     var dlls = FileUtil.Files(d, 8).Where(f => Path.GetFileName(f).Equals(Iocs.DllName, StringComparison.OrdinalIgnoreCase)).ToList();
-                    var ev = new List<string>();
-                    if (dlls.Count > 0) ev.AddRange(dlls.Select(f => $"{f} ({FileUtil.Size(f):N0} bytes, {L("생성", "created")} {FileUtil.Created(f):yyyy-MM-dd HH:mm:ss})"));
-                    else ev.Add(L("DLL 은 없지만 64자리 폴더가 남아 있습니다 (DLL 이 이미 지워졌을 수 있음)", "No DLL, but the 64-character folder remains (the DLL may already have been removed)"));
+                    // 공식 안내 (레벨 인피니트, 11/4): 64자리 폴더 안에 platform_experience_helper.dll 이 있을 때만 그 폴더를 지운다
+                    if (dlls.Count == 0)
+                    {
+                        Add(CheckId.BrowserDll, Severity.Info, L($"{b.Name}: DLL 이 없는 64자리 폴더 (공식 안내 기준 삭제 대상 아님, 참고): {d}", $"{b.Name}: 64-character folder without the DLL (not a deletion target under the official guide; for reference): {d}"),
+                            new[] { L("DLL 이 이미 지워졌거나 브라우저 자체 파일일 수 있어 그대로 둡니다.", "The DLL may already be gone, or the folder may belong to the browser, so it is left alone.") });
+                        continue;
+                    }
+                    var ev = dlls.Select(f => $"{f} ({FileUtil.Size(f):N0} bytes, {L("생성", "created")} {FileUtil.Created(f):yyyy-MM-dd HH:mm:ss})").ToList();
                     Add(CheckId.BrowserDll, Severity.Critical, L($"{b.Name} 지속성 설치됨: {d}", $"{b.Name} persistence installed: {d}"), ev, FixKind.DeleteDirectory, d, browser: b.Process, hint: b.Hint);
                 }
                 // 64자리 폴더 밖에 있는 DLL
@@ -492,6 +509,13 @@ namespace NikkeChecker
                 if (data == null) { _r.Unreadable.Add(f); continue; }
                 var rel = f.Substring(logDir.Length).TrimStart('\\');
 
+                // 공식 안내 (레벨 인피니트, 11/4): Launcher\log\tinyget\tinyget.<날짜>-<시간>.log 가 205,135 bytes 이면 내려받은 에이전트
+                if (!FileUtil.IsLuaJit(data) && Iocs.TinygetAgentName.IsMatch(Path.GetFileName(f)) && Iocs.KnownAgentSizes.Contains(data.Length))
+                {
+                    Add(CheckId.InstallLogs, Severity.Critical, L($"내려받은 에이전트 파일 (로그로 위장한 tinyget, 알려진 에이전트 크기): {f}", $"Downloaded agent file (tinyget disguised as a log, known agent size): {f}"),
+                        new[] { $"{data.Length:N0} bytes, {L("생성", "created")} {FileUtil.Created(f):yyyy-MM-dd HH:mm:ss}" }, FixKind.DeleteFile, f);
+                    continue;
+                }
                 if (FileUtil.IsLuaJit(data) || Iocs.IsK2fName(Path.GetFileName(f)))
                 {
                     Add(CheckId.InstallLogs, Severity.Critical, L($"내려받은 에이전트 파일 ({(FileUtil.IsLuaJit(data) ? "LuaJIT 바이트코드" : "k2f 파일")}): {f}", $"Downloaded agent file ({(FileUtil.IsLuaJit(data) ? "LuaJIT bytecode" : "k2f file")}): {f}"),

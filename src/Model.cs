@@ -152,7 +152,8 @@ namespace NikkeChecker
         public const string FirewallRuleName = "Block_Nikke_Malware_C2";
         public const string LegacyFirewallRuleName = "Block_Nikke_Malware_C2_89.127.233.127";
 
-        public static readonly string[] LauncherProcesses = { "nikke_launcher", "nikke_launcher_google", "tbs_browser", "intl_service" };
+        // nikke = 게임 본체 (공식 안내: 점검 전에 게임·런처를 완전히 종료)
+        public static readonly string[] LauncherProcesses = { "nikke_launcher", "nikke_launcher_google", "tbs_browser", "intl_service", "nikke" };
 
         // HSTS 키 = base64(SHA-256(DNS wire format 호스트 이름)) — TransportSecurity 에는 도메인 문자열이 남지 않음
         public static readonly (string Domain, string Key)[] HstsKeys =
@@ -164,6 +165,8 @@ namespace NikkeChecker
 
         // 알려진 에이전트 크기: 205,135 bytes (10/31 이후 빌드), 165,108 bytes (10/23 빌드, k2f.lua) — MotherSphere 0.4.1
         public static readonly long[] KnownAgentSizes = { 205135, 165108 };
+        // 공식 안내 (레벨 인피니트, 11/4): Launcher\log\tinyget 의 tinyget.<날짜>-<시간>.log 중 205,135 bytes 인 파일이 내려받은 에이전트
+        public static readonly Regex TinygetAgentName = new Regex(@"^tinyget\.\d[\d_-]*\d\.log$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         // insight.bundle 빌드 (ETag "<mtime hex>-3214f")
         public static readonly string[] KnownBuildEtags = { "6ae60b83", "6ae69086", "6ae78037", "6ae8ccff", "6ae90538", "6ae9d408", "6ae9f628" };
 
