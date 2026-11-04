@@ -14,6 +14,25 @@ Delete the launcher cache (`tbs_cache`) before opening the launcher again, and k
 **Official guide (November 4, Level Infinite)**: if you ran the Windows PC launcher at least once after September 27 15:41 (UTC+9), check your PC. The mobile version was not affected.
 The official PC client's security feature (ACE) can also check it. This tool covers every manual check in the official guide (`k2f_chan registered` in `debug.log`, the key under `HKCU\Software\Classes\CLSID`, 64-character folders that hold the DLL, the 205,135-byte file in `Launcher\log\tinyget`, `tbs_cache`).
 
+## If your antivirus flags NikkeChecker
+
+v1.5.0 was once detected by Microsoft Defender as `Trojan:Win32/Wacatac.B!ml`. We reported it as a false positive; Microsoft confirmed the file does not meet its criteria for malware or potentially unwanted applications and removed the detection.
+
+If Defender still deletes NikkeChecker, your PC may be using a cached detection. Clear it and get the latest definitions with the commands below.
+(Paste them into Notepad, save as any name ending in `.cmd`, then right-click it and choose **Run as administrator**.)
+
+```bat
+:: 1. Go to the Defender folder
+cd /d "C:\Program Files\Windows Defender"
+:: 2. Remove cached dynamic signatures and definitions
+MpCmdRun.exe -RemoveDefinitions -DynamicSignatures
+:: 3. Download and install the latest definitions
+MpCmdRun.exe -SignatureUpdate
+```
+
+You can also download the latest definitions from [Microsoft](https://learn.microsoft.com/defender-endpoint/manage-updates-baselines-microsoft-defender-antivirus).
+We do not recommend turning Defender off or adding an exclusion. To confirm your download is genuine, use the build provenance check in [Verify the download](#verify-the-download).
+
 ## Checks (only the ticked ones run)
 
 | # | Check | Infected (●) | Exposed (▲) |

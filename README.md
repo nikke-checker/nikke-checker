@@ -15,6 +15,25 @@ Level Infinite 는 11월 4일 수정을 발표했지만, 공격자가 CDN 에 �
 **공식 안내 (11월 4일, 레벨 인피니트)**: 9월 27일 15:41(UTC+9) 이후 Windows PC 런처를 한 번이라도 실행했다면 점검이 필요합니다. 모바일 버전은 영향이 없습니다.
 공식 PC 클라이언트의 보안 기능(ACE)으로도 점검할 수 있습니다. 이 도구는 공식 안내의 수동 점검 기준(`debug.log` 의 `k2f_chan registered`, `HKCU\Software\Classes\CLSID` 의 키, DLL 이 든 64자리 폴더, `Launcher\log\tinyget` 의 205,135 bytes 파일, `tbs_cache`)을 모두 포함합니다.
 
+## 백신이 NikkeChecker 를 악성 코드로 감지할 때
+
+v1.5.0 이 Microsoft Defender 에 `Trojan:Win32/Wacatac.B!ml` 로 감지된 일이 있었습니다. Microsoft 에 오탐으로 신고했고, Microsoft 는 악성 코드나 원치 않는 프로그램(PUA) 기준에 해당하지 않는다고 확인한 뒤 감지를 없앴습니다.
+
+그래도 Defender 가 NikkeChecker 를 계속 지운다면, PC 에 남아 있는 예전 감지 기록 때문일 수 있습니다. 아래 명령으로 기록을 지우고 최신 정의를 받아 주세요.
+(메모장에 붙여 넣고 아무 이름이나 `.cmd` 로 저장한 뒤, 우클릭해서 **관리자 권한으로 실행**)
+
+```bat
+:: 1. 디펜더 프로그램 경로로 이동
+cd /d "C:\Program Files\Windows Defender"
+:: 2. 기존 동적 시그니처 및 정의 파일 삭제
+MpCmdRun.exe -RemoveDefinitions -DynamicSignatures
+:: 3. 최신 바이러스 정의 파일 강제 다운로드 및 업데이트
+MpCmdRun.exe -SignatureUpdate
+```
+
+최신 정의는 [Microsoft 안내 페이지](https://learn.microsoft.com/defender-endpoint/manage-updates-baselines-microsoft-defender-antivirus)에서 직접 받을 수도 있습니다.
+Defender 를 끄거나 예외로 등록하는 방법은 권하지 않습니다. 내려받은 파일이 진짜인지는 [릴리스](#릴리스)의 빌드 출처 증명으로 확인할 수 있습니다.
+
 ## 점검 항목 (체크한 항목만 점검)
 
 | # | 항목 | 감염(●) | 노출(▲) |
