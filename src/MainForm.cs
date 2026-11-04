@@ -8,173 +8,789 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using NikkeChecker.Ui;
 using static NikkeChecker.I18n;
 
 namespace NikkeChecker
 {
+    /// <summary>
+    /// 화면 4단계: 시작 → 점검 중 → 결과 → 정리 완료.
+    /// 기록(로그)은 「자세히 보기」 창에 모으고, 보고서는 그 기록을 그대로 저장한다.
+    /// </summary>
     public sealed class MainForm : Form
     {
-        private sealed class Item
-        {
-            public CheckId Id;
-            public CheckBox Box;
-            public Label Status;
-        }
+        // ---- 공통 틀 ----
+        private readonly Panel _body = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Background, Padding = new Padding(28, 24, 28, 24) };
+        private readonly UiStack _stack = new UiStack();
+        private readonly FlowLayoutPanel _footLeft = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Left, WrapContents = false, BackColor = Theme.Card, Padding = new Padding(0, 12, 0, 0) };
+        private readonly FlowLayoutPanel _footRight = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Right, WrapContents = false, FlowDirection = FlowDirection.RightToLeft, BackColor = Theme.Card };
 
-        private readonly List<Item> _items = new List<Item>();
-        private readonly TextBox _pathBox = new TextBox();
-        private readonly Button _browseBtn = new Button();
-        private readonly CheckBox _fixBox = new CheckBox();
-        private readonly CheckBox _tbsBox = new CheckBox();
-        private readonly CheckBox _blockBox = new CheckBox();
-        private readonly CheckBox _wdoBox = new CheckBox();
-        private readonly Button _scanBtn = new Button();
-        private readonly Button _fixBtn = new Button();
-        private readonly Button _stopBtn = new Button();
-        private readonly Button _saveBtn = new Button();
-        private readonly Button _uninstallBtn = new Button();
+        // ---- 기록 ----
         private readonly RichTextBox _logBox = new RichTextBox();
-        private readonly ProgressBar _progress = new ProgressBar();
-        private readonly Label _summary = new Label();
+        private Form _logForm;
+
+        // ---- 설정 (시작 화면의 고급 설정, 결과 화면의 정리 옵션) ----
+        private readonly Dictionary<CheckId, CheckBox> _checks = new Dictionary<CheckId, CheckBox>();
+        private readonly TextBox _pathBox = new TextBox();
+        private readonly CheckBox _optClean = new CheckBox();
+        private readonly CheckBox _optTbs = new CheckBox();
+        private readonly CheckBox _optBlock = new CheckBox();
+        private readonly CheckBox _optWdo = new CheckBox();
+
+        // ---- 점검 중 화면 ----
+        private readonly Dictionary<CheckId, UiStepRow> _steps = new Dictionary<CheckId, UiStepRow>();
+        private UiProgress _progress;
+        private Label _progressCount, _progressDetail;
 
         private CancellationTokenSource _cts;
         private ScanResult _last;
+        private Verdict _lastVerdict;
+        private string _lastReport;
 
-        private static string UiFont => En ? "Segoe UI" : "Malgun Gothic";
         private static string WdoMarker => Path.Combine(Iocs.LocalAppData, @"NikkeChecker\offline_scan.txt");
+        private bool Busy => _cts != null;
+
+        private static readonly CheckId[] AllChecks =
+        {
+            CheckId.BrowserDll, CheckId.Clsid, CheckId.Processes, CheckId.LauncherData, CheckId.Temp,
+            CheckId.FullScan, CheckId.InstallLogs, CheckId.Autostart, CheckId.Extra, CheckId.Protection,
+        };
+
+        /// <summary>점검 항목의 쉬운 이름.</summary>
+        private static string Friendly(CheckId id)
+        {
+            switch (id)
+            {
+                case CheckId.BrowserDll: return L("브라우저에 심어진 해킹 파일", "Hacking files planted in browsers");
+                case CheckId.Clsid: return L("해킹 파일을 실행시키는 등록 (레지스트리)", "Registry entries that run the hacking file");
+                case CheckId.Processes: return L("지금 실행 중인 프로그램", "Programs running now");
+                case CheckId.LauncherData: return L("런처 데이터 (해킹 프로그램 상태·해커 서버 접속 기록)", "Launcher data (agent state, hacker server records)");
+                case CheckId.Temp: return L("임시 폴더의 빼낸 정보 파일", "Stolen-data files in the temp folder");
+                case CheckId.FullScan: return L("모든 드라이브에서 해킹 파일 찾기", "Hacking files on all drives");
+                case CheckId.InstallLogs: return L("니케 설치 폴더의 실행 기록", "Run records in the NIKKE install folder");
+                case CheckId.Autostart: return L("해커가 따로 깔았을 수 있는 프로그램", "Programs the hacker may have installed");
+                case CheckId.Extra: return L("해커 서버 연결·원격 조종 설정", "Hacker server connections and remote-control settings");
+                default: return L("해커 서버 차단 상태", "Hacker server block status");
+            }
+        }
+
+        /// <summary>점검 항목의 자세한 설명 (고급 설정).</summary>
+        private static string Detail(CheckId id)
+        {
+            switch (id)
+            {
+                case CheckId.BrowserDll: return L("Chromium 계열 14종의 PlatformExperienceHelper\\<64자리> 폴더와 DLL", "PlatformExperienceHelper\\<64 hex> folders and DLLs in 14 Chromium browsers");
+                case CheckId.Clsid: return L("HKCU CLSID {E77CC89B-…} 와 같은 수법의 다른 이름", "HKCU CLSID {E77CC89B-…} and variants");
+                case CheckId.Processes: return L("악성 DLL 이 로드된 프로그램, 실행 중인 런처", "Programs with the DLL loaded, running launcher");
+                case CheckId.LauncherData: return L("k2f.agent, 악성 스크립트 캐시, HSTS·네트워크 기록, 런처 로그인 프로필", "k2f.agent, script cache, HSTS/network records, login profile");
+                case CheckId.Temp: return L("k2f-bcreds·k2f-keyscan·k2f_screen 파일", "k2f-bcreds, k2f-keyscan, k2f_screen files");
+                case CheckId.FullScan: return L("정해진 위치 밖의 에이전트·DLL 파일 (수 분 걸릴 수 있음)", "Agent/DLL files outside known places (can take minutes)");
+                case CheckId.InstallLogs: return L("debug.log 실행 기록, 다운로드 기록, 저장된 에이전트 파일", "debug.log runs, download records, saved agent files");
+                case CheckId.Autostart: return L("9/27 이후 생긴 서명 없는 자동 실행 (UAC, 읽기만 함, 판정 영향 없음)", "Unsigned autostarts since 9/27 (UAC, read-only, no effect on verdict)");
+                case CheckId.Extra: return L("해커 서버 연결·DNS, 브라우저 원격 조종, Defender 제외, 원격 접속, 프록시, Winlogon·IFEO·AppInit", "Server connections, DNS, browser remote control, Defender exclusions, remote access, proxy, Winlogon/IFEO/AppInit");
+                default: return L("hosts 7개 도메인, 방화벽 규칙 (참고용)", "7 domains in hosts, firewall rule (reference)");
+            }
+        }
 
         public MainForm()
         {
-            Text = L("NIKKE PC 런처 감염 점검 도구 v", "NIKKE PC Launcher Infection Checker v") + Application.ProductVersion;
-            Font = new Font(UiFont, 9F);
+            Text = L("NIKKE PC 런처 감염 점검", "NIKKE PC Launcher Infection Check") + " v" + Application.ProductVersion;
+            Font = Theme.Font(9.5f);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(940, 900);
-            MinimumSize = new Size(780, 720);
+            BackColor = Theme.Background;
+            ClientSize = new Size(820, 720);
+            MinimumSize = new Size(700, 600);
             StartPosition = FormStartPosition.CenterScreen;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(10) };
-            for (int i = 0; i < 5; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            Controls.Add(root);
-
-            // ---- 안내 + 언어 전환 ----
-            var top = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 0, 0, 8) };
-            top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            top.Controls.Add(new Label
+            // 머리글
+            var header = new Panel { Dock = DockStyle.Top, Height = 64, BackColor = Theme.Card, Padding = new Padding(24, 0, 24, 1) };
+            header.Paint += (s, e) =>
             {
-                AutoSize = true, MaximumSize = new Size(820, 0), Margin = new Padding(3, 0, 3, 0),
-                Text = L("2026년 9월 27일 이후 NIKKE PC 런처를 실행한 적이 있다면 점검하세요. (악성 에이전트는 10월 23일부터 일부 실행 시에 배포됨)\n" +
-                         "점검할 항목을 선택하고 [점검 시작]을 누르세요. 점검은 아무것도 바꾸지 않습니다.",
-                         "Check this PC if you ran the NIKKE PC launcher on or after Sep 27, 2026. (The malicious agent was served on some launches from Oct 23.)\n" +
-                         "Select the items to check and press [Start check]. Checking changes nothing."),
-            }, 0, 0);
-            var lang = new LinkLabel { Text = En ? "한국어" : "English", AutoSize = true, Anchor = AnchorStyles.Top | AnchorStyles.Right };
-            lang.LinkClicked += (s, e) => SwitchLanguage();
-            top.Controls.Add(lang, 1, 0);
-            root.Controls.Add(top);
+                Icons.Draw(e.Graphics, IconKind.Shield, new RectangleF(24, 18, 28, 28), Theme.Foreground, 2f);
+                using (var p = new Pen(Theme.Border)) e.Graphics.DrawLine(p, 0, header.Height - 1, header.Width, header.Height - 1);
+            };
+            var title = Layouts.Text(L("NIKKE PC 런처 감염 점검", "NIKKE PC Launcher Infection Check"), 12f, FontStyle.Bold);
+            title.Location = new Point(62, 20);
+            header.Controls.Add(title);
+            var headRight = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, WrapContents = false, BackColor = Theme.Card, Padding = new Padding(0, 16, 0, 0) };
+            var lang = new UiButton { Text = En ? "한국어" : "English", Variant = ButtonVariant.Ghost, AutoSize = true, Font = Theme.Font(9f) };
+            lang.Click += (s, e) => SwitchLanguage();
+            var ver = Layouts.Text("v" + Application.ProductVersion, 9f, FontStyle.Regular, Theme.MutedForeground, new Padding(8, 9, 0, 0));
+            headRight.Controls.AddRange(new Control[] { lang, ver });
+            header.Controls.Add(headRight);
 
-            // ---- 점검 항목 ----
-            var checkGroup = new GroupBox { Text = L("점검 항목", "Checks"), Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8) };
-            var t = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2 };
-            t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            checkGroup.Controls.Add(t);
-            root.Controls.Add(checkGroup);
+            // 바닥글
+            var footer = new Panel { Dock = DockStyle.Bottom, Height = 78, BackColor = Theme.Card, Padding = new Padding(24, 16, 24, 14) };
+            footer.Paint += (s, e) => { using (var p = new Pen(Theme.Border)) e.Graphics.DrawLine(p, 0, 0, footer.Width, 0); };
+            footer.Controls.Add(_footLeft);
+            footer.Controls.Add(_footRight);
 
-            AddItem(t, CheckId.BrowserDll,   L("1. 브라우저 지속성 DLL  (Chromium 계열 14종 PlatformExperienceHelper\\<64자리>, 구버전 Chrome 파일 포함)",
-                                               "1. Browser persistence DLL  (PlatformExperienceHelper\\<64 hex> in 14 Chromium browsers, older Chrome files)"));
-            AddItem(t, CheckId.Clsid,        L("2. 레지스트리 CLSID 하이재킹  (" + Iocs.BadClsid + ", WOW6432Node, 빈 잔여 키 포함)",
-                                               "2. Registry CLSID hijack  (" + Iocs.BadClsid + ", WOW6432Node, empty leftover key)"));
-            AddItem(t, CheckId.Processes,    L("3. 실행 중 프로세스  (런처 실행 여부, 악성 DLL 이 로드된 프로그램)",
-                                               "3. Running processes  (launcher running, programs with the malicious DLL loaded)"));
-            AddItem(t, CheckId.LauncherData, L("4. 런처 데이터  (k2f.agent, 악성 스크립트 캐시, HSTS·네트워크 접속 기록)",
-                                               "4. Launcher data  (k2f.agent, malicious script cache, HSTS and network records)"));
-            AddItem(t, CheckId.Temp,         L("5. 임시 폴더  (k2f-bcreds-* 탈취 자격 증명, k2f_screen_* 화면 캡처)",
-                                               "5. Temp folder  (k2f-bcreds-* stolen credentials, k2f_screen_* screenshots)"));
-            AddItem(t, CheckId.FullScan,     L("6. 전체 드라이브 파일 이름 검사  (정해진 위치 밖의 에이전트·DLL 파일, 니케 설치 위치 — 수 분 걸릴 수 있음)",
-                                               "6. File-name scan of all drives  (agent/DLL files outside known places, NIKKE install location - can take minutes)"));
-            AddItem(t, CheckId.InstallLogs,  L("7. 니케 설치 폴더  (debug.log 실행 기록, tinyget 다운로드 기록, 저장된 에이전트 파일)",
-                                               "7. NIKKE install folder  (debug.log runs, tinyget download records, saved agent files)"));
+            _body.Controls.Add(_stack);
+            _body.Resize += (s, e) => FitBody();
+            Controls.Add(_body);
+            Controls.Add(header);
+            Controls.Add(footer);
 
-            var pathRow = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3, Margin = new Padding(20, 0, 0, 0) };
-            pathRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            // 기록 창 (자세히 보기)
+            _logBox.Dock = DockStyle.Fill; _logBox.ReadOnly = true;
+            _logBox.BackColor = Color.FromArgb(24, 24, 27); _logBox.ForeColor = Color.Gainsboro;
+            _logBox.Font = Theme.Font(9f); _logBox.WordWrap = false; _logBox.DetectUrls = false; _logBox.BorderStyle = BorderStyle.None;
+
+            BuildSettings();
+            Log(L($"NIKKE PC 런처 감염 점검 v{Application.ProductVersion} — {Environment.MachineName} / {Environment.UserName}",
+                  $"NIKKE PC Launcher Infection Check v{Application.ProductVersion} - {Environment.MachineName} / {Environment.UserName}"), LogLevel.Detail);
+            ShowStart();
+        }
+
+        private void BuildSettings()
+        {
+            foreach (var id in AllChecks)
+                _checks[id] = new CheckBox { Text = Friendly(id), Checked = true, AutoSize = true, Font = Theme.Font(9.5f), BackColor = Color.Transparent, Margin = new Padding(0, 6, 0, 0) };
+            _pathBox.Font = Theme.Font(9.5f);
+            _pathBox.BorderStyle = BorderStyle.FixedSingle;
+            SetupOption(_optClean, L("발견한 해킹 흔적 지우기 (브라우저·런처가 잠시 꺼집니다)", "Remove the hacking traces found (browsers and the launcher close for a moment)"), true);
+            SetupOption(_optTbs, L("런처 캐시 지우기 (런처를 다시 열기 전에 권장, 런처 로그인만 다시 하면 됨)", "Delete the launcher cache (recommended before reopening the launcher; you only sign in again)"), true);
+            SetupOption(_optBlock, L("해커 서버 차단 (hosts·방화벽, 관리자 확인 창이 뜹니다)", "Block the hacker servers (hosts + firewall, an admin prompt appears)"), true);
+            SetupOption(_optWdo, L("마지막에 Windows 백신 정밀 검사 (재부팅, 약 15분)", "Finally run a Windows Defender deep scan (restart, about 15 min)"), false);
+        }
+
+        private static void SetupOption(CheckBox c, string text, bool on)
+        {
+            c.Text = text; c.Checked = on; c.AutoSize = true; c.Font = Theme.Font(9.5f); c.BackColor = Color.Transparent; c.Margin = new Padding(0, 4, 0, 4);
+        }
+
+        // ------------------------------------------------------------------
+        // 화면 틀 도우미
+        // ------------------------------------------------------------------
+        private void SetView(IEnumerable<Control> body, IEnumerable<Control> footLeft, IEnumerable<Control> footRight)
+        {
+            _body.SuspendLayout();
+            foreach (Control c in _stack.Controls.Cast<Control>().ToList()) { _stack.Controls.Remove(c); if (!IsReused(c)) c.Dispose(); }
+            _stack.Controls.AddRange(body.ToArray());
+            _footLeft.Controls.Clear(); _footLeft.Controls.AddRange(footLeft.ToArray());
+            _footRight.Controls.Clear(); _footRight.Controls.AddRange(footRight.ToArray());
+            _body.AutoScrollPosition = new Point(0, 0);
+            FitBody();
+            _body.ResumeLayout(true);
+        }
+
+        // 설정 체크박스처럼 화면을 바꿔도 다시 쓰는 컨트롤은 Dispose 하지 않는다
+        private bool IsReused(Control c) =>
+            c.Controls.Cast<Control>().Any(IsReused) || _checks.Values.Contains(c) || c == _pathBox ||
+            c == _optClean || c == _optTbs || c == _optBlock || c == _optWdo;
+
+        private void FitBody()
+        {
+            // 세로 스크롤 막대가 생겨도 줄이 다시 흐르지 않게 막대 폭을 늘 빼 둔다
+            int w = _body.Width - _body.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth - 2;
+            _stack.Location = new Point(_body.Padding.Left, _body.Padding.Top);
+            _stack.FitWidth(Math.Max(200, w));
+        }
+
+        private static UiButton Button(string text, ButtonVariant v, EventHandler click, bool large = false)
+        {
+            var b = new UiButton { Text = text, Variant = v, Large = large, AutoSize = true, Margin = new Padding(8, 0, 0, 0) };
+            if (large) b.Font = Theme.Font(11f, FontStyle.Bold);
+            b.Size = b.GetPreferredSize(Size.Empty);
+            if (click != null) b.Click += click;
+            return b;
+        }
+
+        private static UiButton Link(string text, EventHandler click)
+        {
+            var b = new UiButton { Text = text, Variant = ButtonVariant.Link, AutoSize = true, Font = Theme.Font(9.5f), Margin = new Padding(0, 0, 18, 0) };
+            b.Size = b.GetPreferredSize(Size.Empty);
+            b.Click += click;
+            return b;
+        }
+
+        private static UiCard Alert(IconKind icon, Color tone, Color fill, Color stroke, string label, string title, string description)
+        {
+            var card = Layouts.Card(
+                Layouts.Text(label, 8.5f, FontStyle.Bold, tone, new Padding(0, 0, 0, 4)),
+                Layouts.Text(title, 13f, FontStyle.Bold, Theme.Foreground, new Padding(0, 0, 0, 6)),
+                Layouts.Text(description, 9.5f, FontStyle.Regular, Color.FromArgb(0x3F, 0x3F, 0x46), new Padding(0)));
+            card.SetTone(fill, stroke);
+            card.Icon = icon; card.IconColor = tone; card.IconSize = 28;
+            card.Padding = new Padding(64, 20, 22, 20);
+            card.Margin = new Padding(0, 0, 0, 18);
+            return card;
+        }
+
+        private static Label Heading(string text) => Layouts.Text(text, 11f, FontStyle.Bold, Theme.Foreground, new Padding(0, 4, 0, 8));
+        private static Label Muted(string text, Padding? m = null) => Layouts.Text(text, 9f, FontStyle.Regular, Theme.MutedForeground, m ?? new Padding(0, 0, 0, 4));
+
+        // ------------------------------------------------------------------
+        // 1. 시작
+        // ------------------------------------------------------------------
+        private void ShowStart()
+        {
+            var start = Button(L("점검 시작", "Start check"), ButtonVariant.Default, async (s, e) => await ScanAsync(), large: true);
+            start.Margin = new Padding(0, 8, 0, 14);
+
+            var badges = Layouts.Row(
+                new UiBadge { Text = L("설치 불필요", "No install"), Variant = BadgeVariant.Outline },
+                new UiBadge { Text = L("인터넷 연결 안 함", "No internet use"), Variant = BadgeVariant.Outline },
+                new UiBadge { Text = L("공개 소스", "Open source"), Variant = BadgeVariant.Outline },
+                new UiBadge { Text = L("점검은 아무것도 바꾸지 않음", "Checking changes nothing"), Variant = BadgeVariant.Outline });
+            badges.Margin = new Padding(0, 0, 0, 24);
+
+            var advanced = new UiCollapsible(L("고급 설정 — 점검 항목 고르기, 니케 설치 경로 지정", "Advanced - choose checks, set the NIKKE install path"));
+            var adv = advanced.Content;
+            adv.Controls.Add(Muted(L("점검할 항목 (기본은 전부)", "Checks to run (all by default)"), new Padding(0, 4, 0, 0)));
+            foreach (var id in AllChecks)
+            {
+                adv.Controls.Add(_checks[id]);
+                adv.Controls.Add(Muted(Detail(id), new Padding(20, 0, 0, 2)));
+            }
+            adv.Controls.Add(Muted(L("니케 설치 경로 (비워 두면 자동으로 찾음)", "NIKKE install path (leave empty to find it automatically)"), new Padding(0, 14, 0, 4)));
+            var browse = Button(L("찾아보기…", "Browse…"), ButtonVariant.Outline, (s, e) => BrowseInstallPath());
+            var pathRow = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 8) };
             pathRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             pathRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            pathRow.Controls.Add(new Label { Text = L("니케 설치 경로:", "NIKKE install path:"), AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 7, 3, 3) }, 0, 0);
-            _pathBox.Dock = DockStyle.Fill;
-            pathRow.Controls.Add(_pathBox, 1, 0);
-            _browseBtn.Text = L("찾아보기…", "Browse…"); _browseBtn.AutoSize = true;
-            _browseBtn.Click += (s, e) => BrowseInstallPath();
-            pathRow.Controls.Add(_browseBtn, 2, 0);
-            AddSpanning(t, pathRow);
-            AddSpanning(t, new Label
-            {
-                AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(23, 0, 3, 4),
-                Text = L("비워 두면 런처가 기록한 설치 경로를 찾고, 없으면 드라이브를 탐색합니다 (수 분 걸릴 수 있음)",
-                         "Leave empty to use the path the launcher recorded, or search the drives (can take minutes)"),
-            });
+            _pathBox.Dock = DockStyle.Fill; _pathBox.Margin = new Padding(0, 6, 0, 0);
+            pathRow.Controls.Add(_pathBox, 0, 0);
+            pathRow.Controls.Add(browse, 1, 0);
+            adv.Controls.Add(pathRow);
 
-            AddItem(t, CheckId.Autostart,  L("8. 자동 실행 프로그램  (9/27 이후 생긴 서명 없는 프로그램 — PC 전체를 보려면 UAC, 읽기만 함, 판정에 영향 없음)",
-                                             "8. Autostart programs  (unsigned, new since 9/27 - UAC to read PC-wide entries, read-only, no effect on the verdict)"));
-            AddItem(t, CheckId.Extra,      L("9. 추가 보안 점검  (해커 서버 연결·DNS 기록, 브라우저 원격 조종·강제 확장, Defender 제외, 원격 접속 프로그램, 프록시, Winlogon·IFEO·AppInit)",
-                                             "9. Extra checks  (hacker server connections, DNS, browser remote control / forced extensions, Defender exclusions, remote-access apps, proxy, Winlogon/IFEO/AppInit)"));
-            AddItem(t, CheckId.Protection, L("10. 차단 상태 확인  (hosts 7개 도메인, 방화벽 규칙 내용) ※ 참고용",
-                                             "10. Block status  (7 domains in hosts, firewall rule contents) - for reference"));
+            var note = Layouts.Card(
+                Layouts.Text(L("관리자 확인 창이 한 번 뜹니다", "An administrator prompt appears once"), 9.5f, FontStyle.Bold, Theme.Foreground, new Padding(0, 0, 0, 2)),
+                Muted(L("PC 전체(서비스·작업 스케줄러·Defender 설정 등)를 읽기 위해서입니다. 읽기만 하고, 아무것도 바꾸지 않습니다.",
+                        "It is needed to read PC-wide settings (services, scheduled tasks, Defender settings). It only reads; nothing is changed."), new Padding(0)));
+            note.SetTone(Theme.Muted, Theme.Border);
+            note.Icon = IconKind.Info; note.IconColor = Theme.MutedForeground; note.IconSize = 18;
+            note.Padding = new Padding(50, 14, 18, 14);
+            note.Margin = new Padding(0, 16, 0, 0);
 
-            // ---- 조치 옵션 ----
-            var fixGroup = new GroupBox
+            SetView(new Control[]
             {
-                Text = L("조치 옵션 ([조치 실행] 시 적용 — 실행 전에 보고서를 바탕화면에 자동 저장)", "Clean-up options (applied by [Clean up] - the report is saved to the Desktop first)"),
-                Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8),
+                Layouts.Text(L("이 PC가 니케 런처 해킹에 영향을 받았는지 확인합니다", "Check whether this PC was affected by the NIKKE launcher hack"), 18f, FontStyle.Bold, Theme.Foreground, new Padding(0, 8, 0, 8)),
+                Muted(L("2026년 9월 27일 이후 NIKKE PC 런처를 켠 적이 있다면 점검하세요. 약 1~5분 걸립니다.",
+                        "Check this PC if you ran the NIKKE PC launcher on or after Sep 27, 2026. It takes about 1-5 minutes."), new Padding(0, 0, 0, 12)),
+                start, badges, advanced, note,
+            }, new Control[0], new Control[0]);
+            start.Focus();
+        }
+
+        private void BrowseInstallPath()
+        {
+            using (var d = new FolderBrowserDialog { Description = L("NIKKE 설치 폴더(Launcher 폴더가 들어 있는 폴더)를 선택하세요", "Select the NIKKE install folder (the folder that holds the Launcher folder)") })
+                if (d.ShowDialog(this) == DialogResult.OK) _pathBox.Text = d.SelectedPath;
+        }
+
+        // ------------------------------------------------------------------
+        // 2. 점검 중
+        // ------------------------------------------------------------------
+        private void ShowScanning(List<CheckId> ids)
+        {
+            _steps.Clear();
+            var list = new UiStack();
+            foreach (var id in ids)
+            {
+                var row = new UiStepRow { Text = Friendly(id) };
+                row.Set(StepState.Pending, L("대기", "Waiting"));
+                _steps[id] = row;
+                list.Controls.Add(row);
+            }
+            var card = Layouts.Card(list);
+            card.Padding = new Padding(1, 6, 1, 6);
+
+            _progressCount = Layouts.Text($"0 / {ids.Count}", 10f, FontStyle.Regular, Theme.MutedForeground, new Padding(0));
+            _progressCount.Tag = "keep";
+            _progress = new UiProgress();
+            _progressDetail = Muted(L("준비 중…", "Preparing…"), new Padding(0, 0, 0, 14));
+
+            var stop = Button(L("중지", "Stop"), ButtonVariant.Outline, (s, e) => _cts?.Cancel());
+            SetView(new Control[]
+            {
+                Layouts.Text(L("점검하는 중입니다…", "Checking…"), 16f, FontStyle.Bold, Theme.Foreground, new Padding(0, 4, 0, 2)),
+                _progressCount, _progress, _progressDetail, card,
+            }, new Control[] { Link(L("자세히 보기", "Show details"), (s, e) => ShowLog()) }, new Control[] { stop });
+        }
+
+        private void OnStepStart(CheckId id, int index, int total)
+        {
+            if (_steps.TryGetValue(id, out var row)) row.Set(StepState.Running, L("확인 중", "Checking"));
+            if (_progressCount != null) _progressCount.Text = $"{index} / {total}";
+            if (_progress != null) _progress.Value = (index - 1) * 100 / Math.Max(1, total);
+        }
+
+        private void OnStepDone(CheckId id, StepSummary s)
+        {
+            if (_steps.TryGetValue(id, out var row)) ApplyStep(row, id, s);
+        }
+
+        private static void ApplyStep(UiStepRow row, CheckId id, StepSummary s)
+        {
+            if (id == CheckId.Protection)
+            {
+                if (s.NotBlocked) row.Set(StepState.Review, L("차단 안 됨", "Not blocked"));
+                else row.Set(StepState.Ok, L("차단됨", "Blocked"));
+                return;
+            }
+            if (s.Worst == Severity.Critical && s.AllPast) row.Set(StepState.Warn, L($"과거 기록 {s.Count}건", $"Past record {s.Count}"));
+            else if (s.Worst == Severity.Critical) row.Set(StepState.Found, L($"발견 {s.Count}건", $"Found {s.Count}"));
+            else if (s.Worst == Severity.Warning) row.Set(StepState.Warn, L($"노출 {s.Count}건", $"Exposed {s.Count}"));
+            else if (s.Worst == Severity.Review) row.Set(StepState.Review, L($"확인 필요 {s.Count}건", $"Check {s.Count}"));
+            else if (s.Unknown) row.Set(StepState.Unknown, L("일부 확인 못 함", "Partly unchecked"));
+            else row.Set(StepState.Ok, L("이상 없음", "OK"));
+        }
+
+        private async Task ScanAsync()
+        {
+            var ids = AllChecks.Where(id => _checks[id].Checked).ToList();
+            if (ids.Count == 0) { MessageBox.Show(this, L("점검할 항목을 하나 이상 고르세요.", "Choose at least one check."), Text); return; }
+            var opt = new ScanOptions
+            {
+                InstallPath = _pathBox.Text,
+                AuditSystem = () => Remediator.RunAudit(SafeLog),
+                OnStepStart = (id, i, n) => Ui(() => OnStepStart(id, i, n)),
+                OnStepDone = (id, sm) => Ui(() => OnStepDone(id, sm)),
             };
-            var fixFlow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
-            fixGroup.Controls.Add(fixFlow);
-            root.Controls.Add(fixGroup);
+            foreach (var id in ids) opt.Checks.Add(id);
 
-            SetupOption(_fixBox, L("발견된 악성 항목 제거  (레지스트리 키 → 프로세스 종료 → DLL 폴더, Temp k2f 파일, 에이전트 파일) + 고른 자동 실행 프로그램",
-                                   "Remove what was found  (registry key -> end processes -> DLL folder, temp k2f files, agent files) + autostart programs you pick"), true);
-            SetupOption(_tbsBox, L("런처 캐시(tbs_cache) 삭제  (흔적이 없어도 런처를 다시 열기 전에 권장)",
-                                   "Delete the launcher cache (tbs_cache)  (recommended before opening the launcher again, even with no traces)"), true);
-            SetupOption(_blockBox, L($"hosts 도메인 차단 + 방화벽 IP 차단 ({string.Join(", ", Iocs.C2Ips)})  — 관리자 권한(UAC) 필요",
-                                     $"Block the domains in hosts + the IPs in the firewall ({string.Join(", ", Iocs.C2Ips)})  - needs administrator rights (UAC)"), true);
-            SetupOption(_wdoBox, L("마지막에 Windows Defender 오프라인 검사  (재부팅, 약 15분 — 이름이 알려진 다른 해킹 도구를 찾아 지움)",
-                                   "Finally run a Windows Defender offline scan  (restarts the PC, about 15 min - finds and removes other known hacking tools)"), false);
-            fixFlow.Controls.AddRange(new Control[] { _fixBox, _tbsBox, _blockBox, _wdoBox });
+            _last = null;
+            _cts = new CancellationTokenSource();
+            ShowScanning(ids);
+            Log("", LogLevel.Info);
+            Log(L($"===== 점검 시작 {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====", $"===== Check started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====="), LogLevel.Header);
+            try
+            {
+                var token = _cts.Token;
+                var r = await Task.Run(() => new Scanner(SafeLog, token).Run(opt));
+                _last = r;
+                if (r.Installs.Count > 0 && string.IsNullOrWhiteSpace(_pathBox.Text)) _pathBox.Text = r.Installs[0];
+                LogVerdict(r);
+                _cts.Dispose(); _cts = null;
+                ShowResult(r);
+            }
+            catch (OperationCanceledException)
+            {
+                Log(L("[!] 사용자가 점검을 중지했습니다.", "[!] The check was stopped."), LogLevel.Warn);
+                _cts.Dispose(); _cts = null;
+                ShowStart();
+            }
+            catch (Exception ex)
+            {
+                Log(L("[X] 점검 중 오류: ", "[X] Error during the check: ") + ex, LogLevel.Bad);
+                _cts?.Dispose(); _cts = null;
+                MessageBox.Show(this, L("점검 중 오류가 났습니다. 「자세히 보기」의 기록을 확인해 주세요.", "An error occurred during the check. See the log in Show details."), Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ShowStart();
+            }
+        }
 
-            // ---- 버튼 ----
-            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
-            root.Controls.Add(buttons);
-            SetupButton(_scanBtn, L("점검 시작", "Start check"), async (s, e) => await ScanAsync());
-            SetupButton(_fixBtn, L("조치 실행", "Clean up"), async (s, e) => await FixAsync());
-            SetupButton(_stopBtn, L("중지", "Stop"), (s, e) => _cts?.Cancel());
-            SetupButton(_saveBtn, L("보고서 저장", "Save report"), (s, e) => SaveLogDialog());
-            SetupButton(_uninstallBtn, L("니케 완전 삭제…", "Remove NIKKE…"), async (s, e) => await UninstallAsync());
-            _scanBtn.Font = new Font(Font, FontStyle.Bold);
-            buttons.Controls.AddRange(new Control[] { _scanBtn, _fixBtn, _stopBtn, _saveBtn, _uninstallBtn });
-            _progress.Style = ProgressBarStyle.Marquee; _progress.MarqueeAnimationSpeed = 0;
-            _progress.Width = 160; _progress.Margin = new Padding(12, 10, 3, 3);
-            buttons.Controls.Add(_progress);
+        // ------------------------------------------------------------------
+        // 3. 결과
+        // ------------------------------------------------------------------
+        private void ShowResult(ScanResult r)
+        {
+            _lastVerdict = r.Verdict;
+            var body = new List<Control> { VerdictAlert(r.Verdict) };
 
-            _summary.AutoSize = true; _summary.MaximumSize = new Size(900, 0); _summary.Margin = new Padding(3, 4, 3, 4);
-            _summary.Font = new Font(Font.FontFamily, 10F, FontStyle.Bold);
-            _summary.Text = L("점검 전", "Not checked yet");
-            root.Controls.Add(_summary);
+            // 발견한 것: 점검 항목별 카드 (감염·노출)
+            var groups = AllChecks.Where(id => id != CheckId.Protection)
+                .Select(id => (id, items: r.Findings.Where(f => f.Check == id && (f.Severity == Severity.Critical || f.Severity == Severity.Warning)).ToList()))
+                .Where(g => g.items.Count > 0).ToList();
+            if (groups.Count > 0)
+            {
+                body.Add(Heading(L($"발견한 것 {groups.Count}종류", $"Found: {groups.Count} kinds")));
+                foreach (var (id, items) in groups) body.Add(FindingCard(id, items));
+            }
 
-            // ---- 로그 ----
-            _logBox.Dock = DockStyle.Fill; _logBox.ReadOnly = true;
-            _logBox.BackColor = Color.FromArgb(24, 24, 28); _logBox.ForeColor = Color.Gainsboro;
-            _logBox.Font = new Font(UiFont, 9F);
-            _logBox.WordWrap = false; _logBox.DetectUrls = false;
-            root.Controls.Add(_logBox);
+            // 확인 필요
+            var review = r.Review.ToList();
+            if (review.Count > 0)
+            {
+                var col = new UiCollapsible(L($"확인이 필요한 프로그램·설정 {review.Count}개 — 직접 설치·설정한 것이면 괜찮습니다", $"{review.Count} programs/settings to check - fine if you set them up yourself"));
+                foreach (var a in review.Take(40))
+                {
+                    var tag = a.Hidden ? L("위험 높음: 숨겨진 명령", "HIGH RISK: hidden command") : a.File != null ? Defender.VerdictText(a.Defender) : "";
+                    col.Content.Controls.Add(Layouts.Text($"[{a.Where}] {a.Name}", 9.5f, FontStyle.Bold, a.Defender == "malware" || a.Hidden ? Theme.Destructive : Theme.Foreground, new Padding(0, 6, 0, 0)));
+                    col.Content.Controls.Add(Muted(a.Display + (tag.Length > 0 ? "  ·  " + tag : ""), new Padding(0, 0, 0, 2)));
+                }
+                col.Content.Controls.Add(Muted(L("[정리하기]를 누르면 지울 것을 직접 고르는 창이 뜹니다.", "[Clean up] opens a window where you pick what to remove."), new Padding(0, 8, 0, 0)));
+                col.Margin = new Padding(0, 4, 0, 12);
+                body.Add(col);
+            }
 
-            UpdateButtons();
-            Log(L($"NIKKE PC 런처 감염 점검 도구 v{Application.ProductVersion} — {Environment.MachineName} / {Environment.UserName}",
-                  $"NIKKE PC Launcher Infection Checker v{Application.ProductVersion} - {Environment.MachineName} / {Environment.UserName}"), LogLevel.Detail);
-            if (!Remediator.IsAdmin())
-                Log(L("일반 권한으로 실행 중입니다. 관리자 권한이 필요한 작업(PC 전체 자동 실행 점검, hosts·방화벽, Program Files 파일)만 UAC 로 요청합니다.",
-                      "Running with normal rights. UAC is requested only for admin tasks (PC-wide autostart check, hosts/firewall, Program Files files)."), LogLevel.Detail);
+            if (r.Unknown.Count > 0)
+            {
+                var unk = Layouts.Card(
+                    Layouts.Text(L("일부 항목은 확인하지 못했습니다", "Some checks could not be completed"), 9.5f, FontStyle.Bold, Theme.Foreground, new Padding(0, 0, 0, 2)),
+                    Muted(string.Join(", ", r.Unknown.Keys.Select(Friendly)) + L(" — 「자세히 보기」에 이유가 있습니다.", " - see Show details for why."), new Padding(0)));
+                unk.SetTone(Theme.Muted, Theme.Border);
+                unk.Icon = IconKind.Info; unk.IconColor = Theme.MutedForeground; unk.IconSize = 18; unk.Padding = new Padding(50, 14, 18, 14);
+                body.Add(unk);
+            }
+
+            // 정리 옵션
+            _optClean.Enabled = r.Fixable.Any() || review.Count > 0;
+            _optClean.Checked = _optClean.Enabled;
+            var opts = Layouts.Card(
+                Layouts.Text(L("[정리하기]를 누르면", "[Clean up] will"), 10f, FontStyle.Bold, Theme.Foreground, new Padding(0, 0, 0, 4)),
+                _optClean, _optTbs, _optBlock, _optWdo,
+                Muted(L("지우기 전에 점검 결과를 바탕 화면에 저장합니다.", "The check result is saved to the Desktop before anything is removed."), new Padding(0, 6, 0, 0)));
+            opts.Margin = new Padding(0, 6, 0, 0);
+            body.Add(opts);
+
+            bool danger = r.Verdict == Verdict.Infected;
+            var clean = Button(L("정리하기", "Clean up"), danger ? ButtonVariant.Destructive : ButtonVariant.Default, async (s, e) => await FixAsync(), large: true);
+            SetView(body,
+                new Control[]
+                {
+                    Link(L("자세히 보기", "Show details"), (s, e) => ShowLog()),
+                    Link(L("보고서 저장", "Save report"), (s, e) => SaveLogDialog()),
+                    Link(L("다시 점검", "Check again"), (s, e) => ShowStart()),
+                    Link(L("니케 완전 삭제…", "Remove NIKKE…"), async (s, e) => await UninstallAsync()),
+                },
+                new Control[] { clean });
+        }
+
+        private static UiCard VerdictAlert(Verdict v)
+        {
+            switch (v)
+            {
+                case Verdict.Infected:
+                    return Alert(IconKind.AlertTriangle, Theme.Destructive, Theme.DestructiveBg, Theme.DestructiveBorder, L("판정: 감염", "VERDICT: INFECTED"),
+                        L("해킹 프로그램이 이 PC에서 실행된 흔적이 있습니다", "The hacking program ran on this PC"),
+                        L("런처가 열려 있는 동안 해커가 이 PC에서 명령을 실행할 수 있었습니다. [정리하기]로 남은 해킹 흔적을 지우고, 휴대폰 등 다른 기기로 비밀번호를 바꾸세요.",
+                          "While the launcher was open, the attacker could run commands on this PC. Use [Clean up] to remove what is left, then change your passwords from another device such as your phone."));
+                case Verdict.PastInfection:
+                    return Alert(IconKind.Clock, Theme.Warning, Theme.WarningBg, Theme.WarningBorder, L("판정: 감염됐던 기록 (과거 기록)", "VERDICT: PAST INFECTION (records only)"),
+                        L("해킹 프로그램이 전에 이 PC에서 실행됐습니다", "The hacking program ran on this PC before"),
+                        L("지금 남아 있는 해킹 파일은 없습니다. 런처 기록(debug.log)에 남은 흔적이라 다시 점검해도 계속 나옵니다. 그때 비밀번호가 빠져나갔을 수 있으니 꼭 바꾸세요.",
+                          "No hacking files remain now. The records stay in the launcher log (debug.log), so they show on every check. Passwords may have been stolen back then, so change them."));
+                case Verdict.Exposed:
+                    return Alert(IconKind.AlertTriangle, Theme.Caution, Theme.CautionBg, Theme.CautionBorder, L("판정: 노출", "VERDICT: EXPOSED"),
+                        L("오염된 런처 파일이 이 PC에 들어왔습니다", "Contaminated launcher files reached this PC"),
+                        L("해킹 프로그램이 실행된 기록은 찾지 못했습니다. 9월 27일 이후 런처를 켠 적이 있다면 중요한 비밀번호는 바꿔 두세요.",
+                          "No record of the hacking program running was found. If you opened the launcher after Sep 27, change your important passwords."));
+                case Verdict.NotFound:
+                    return Alert(IconKind.Info, Theme.MutedForeground, Theme.Card, Theme.Border, L("판정: 니케를 찾지 못함", "VERDICT: NIKKE NOT FOUND"),
+                        L("니케 PC 런처도, 남아 있는 해킹 흔적도 찾지 못했습니다", "No NIKKE PC launcher and no remaining traces were found"),
+                        L("다른 곳에 설치했다면 「다시 점검」의 고급 설정에서 경로를 지정하세요. 런처를 이미 지웠다면 지난 기록도 함께 지워져, 그동안 감염됐었는지는 알 수 없습니다.",
+                          "If it is installed elsewhere, set the path in Advanced under Check again. If you already deleted the launcher, its logs are gone too, so a past infection cannot be confirmed."));
+                default:
+                    return Alert(IconKind.Check, Theme.Success, Theme.SuccessBg, Theme.SuccessBorder, L("판정: 흔적 없음", "VERDICT: NO KNOWN TRACES"),
+                        L("알려진 감염 흔적을 찾지 못했습니다", "No known infection traces were found"),
+                        L("100% 보장은 아닙니다. 런처를 다시 열기 전에 [정리하기]로 런처 캐시를 지우고 해커 서버를 차단해 두세요.",
+                          "This is not a 100% guarantee. Before opening the launcher again, use [Clean up] to delete the launcher cache and block the hacker servers."));
+            }
+        }
+
+        private static string FixLine(CheckId id, bool past)
+        {
+            if (past) return L("지울 파일은 아닙니다. 그때 비밀번호가 빠져나갔을 수 있다는 증거입니다.", "Nothing to delete. It is evidence that passwords may have been stolen back then.");
+            switch (id)
+            {
+                case CheckId.BrowserDll: return L("정리하면 심어진 파일을 지웁니다 (해당 브라우저가 잠시 꺼짐)", "Clean up deletes the planted files (the browser closes for a moment)");
+                case CheckId.Clsid: return L("정리하면 등록을 지웁니다", "Clean up deletes the registry entries");
+                case CheckId.Processes: return L("정리하면 해당 프로그램을 끕니다", "Clean up closes those programs");
+                case CheckId.LauncherData: return L("정리하면 런처 캐시를 지웁니다 (런처 로그인만 다시 하면 됨)", "Clean up deletes the launcher cache (you only sign in to the launcher again)");
+                case CheckId.Temp: return L("정리하면 빼낸 정보 파일을 지웁니다", "Clean up deletes the stolen-data files");
+                case CheckId.FullScan: return L("정리하면 파일을 지웁니다 (일부는 직접 확인하라고 안내)", "Clean up deletes the files (some are left for you to check)");
+                case CheckId.InstallLogs: return L("정리하면 저장된 에이전트 파일을 지웁니다. 실행 기록은 증거로 남깁니다.", "Clean up deletes saved agent files. Run records are kept as evidence.");
+                case CheckId.Extra: return L("정리하면 해커 서버와 연결된 프로그램을 끄고 DNS 기록을 비웁니다", "Clean up closes programs connected to the hacker server and clears the DNS records");
+                default: return "";
+            }
+        }
+
+        private static UiCard FindingCard(CheckId id, List<Finding> items)
+        {
+            bool crit = items.Any(f => f.Severity == Severity.Critical);
+            bool past = items.All(f => f.Past);
+            var badge = new UiBadge
+            {
+                Text = past ? L("과거 기록", "Past record") : crit ? L("감염", "Infected") : L("노출", "Exposed"),
+                Variant = past ? BadgeVariant.Warning : crit ? BadgeVariant.Destructive : BadgeVariant.Caution,
+            };
+            var head = Layouts.Row(badge, Layouts.Text(Friendly(id), 10.5f, FontStyle.Bold, Theme.Foreground, new Padding(0, 1, 0, 4)));
+            var stack = new List<Control> { head, Muted(FixLine(id, past), new Padding(0, 0, 0, 6)) };
+            foreach (var f in items.Take(3))
+                stack.Add(Layouts.Text("· " + f.Title, 8.5f, FontStyle.Regular, Theme.MutedForeground, new Padding(0, 0, 0, 2)));
+            if (items.Count > 3) stack.Add(Muted(L($"… 외 {items.Count - 3}건 (자세히 보기)", $"… {items.Count - 3} more (Show details)"), new Padding(0)));
+            return Layouts.Card(stack.ToArray());
+        }
+
+        private void LogVerdict(ScanResult r)
+        {
+            Log("=================================================", LogLevel.Header);
+            var v = r.Verdict;
+            Log(v == Verdict.Infected ? L("[판정] 감염", "[Verdict] INFECTED")
+              : v == Verdict.PastInfection ? L("[판정] 감염됐던 기록 (과거 기록)", "[Verdict] PAST INFECTION (records only)")
+              : v == Verdict.Exposed ? L("[판정] 노출", "[Verdict] EXPOSED")
+              : v == Verdict.NotFound ? L("[판정] NIKKE 를 찾지 못함", "[Verdict] NIKKE not found")
+              : L("[판정] 흔적 없음", "[Verdict] No known traces"),
+                v == Verdict.Infected || v == Verdict.PastInfection ? LogLevel.Bad : v == Verdict.Exposed || v == Verdict.NotFound ? LogLevel.Warn : LogLevel.Ok);
+            if (r.Unreadable.Count > 0)
+            {
+                Log(L($"[참고] 읽지 못해 검사가 불완전한 파일 {r.Unreadable.Count}개 (최대 50개 표시):", $"[Note] Files that could not be fully checked: {r.Unreadable.Count} (up to 50 shown):"), LogLevel.Warn);
+                foreach (var u in r.Unreadable.Distinct().Take(50)) Log("        " + u, LogLevel.Detail);
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // 정리
+        // ------------------------------------------------------------------
+        private async Task FixAsync()
+        {
+            if (_last == null) return;
+            var opt = new FixOptions { DeleteFindings = _optClean.Checked && _optClean.Enabled, AlwaysDeleteTbsCache = _optTbs.Checked, Block = _optBlock.Checked };
+            var fixes = opt.DeleteFindings ? _last.Fixable.ToList() : new List<Finding>();
+            var review = opt.DeleteFindings ? _last.Review.ToList() : new List<AutostartItem>();
+            bool wdo = _optWdo.Checked;
+            if (fixes.Count == 0 && review.Count == 0 && !opt.AlwaysDeleteTbsCache && !opt.Block && !wdo)
+            {
+                MessageBox.Show(this, L("할 일을 하나 이상 고르세요.", "Choose at least one action."), Text);
+                return;
+            }
+
+            var plan = new StringBuilder(L("다음을 실행합니다:\n\n", "The following will be done:\n\n"));
+            foreach (var d in fixes.Select(f => f.FixDescription).Where(d => d != null).Distinct().Take(20)) plan.AppendLine("• " + d);
+            if (fixes.Count > 20) plan.AppendLine(L($"• … 외 {fixes.Count - 20}건", $"• … {fixes.Count - 20} more"));
+            if (opt.AlwaysDeleteTbsCache) plan.AppendLine(L("• 런처 캐시(tbs_cache) 삭제", "• Delete the launcher cache (tbs_cache)"));
+            if (fixes.Any(f => f.Browser != null)) plan.AppendLine(L("• 관련 브라우저 종료", "• Close the affected browsers"));
+            if (fixes.Count > 0 || opt.AlwaysDeleteTbsCache) plan.AppendLine(L("• NIKKE 런처 종료", "• Close the NIKKE launcher"));
+            if (review.Count > 0) plan.AppendLine(L($"• 확인 필요 항목 {review.Count}개 — 다음 창에서 지울 것을 직접 고릅니다", $"• {review.Count} items to check - you pick which to remove in the next window"));
+            if (opt.Block) plan.AppendLine(L("• hosts·방화벽으로 해커 서버 차단 (관리자 확인 창)", "• Block the hacker servers in hosts and the firewall (admin prompt)"));
+            if (wdo) plan.AppendLine(L("• 마지막에 Windows 백신 정밀 검사 (재부팅 전에 한 번 더 묻습니다)", "• Finally a Windows Defender deep scan (you are asked again before the restart)"));
+            plan.AppendLine(L("\n점검 결과를 바탕 화면에 먼저 저장합니다. 브라우저에서 하던 작업이 있으면 먼저 저장하세요. 계속할까요?",
+                              "\nThe check result is saved to the Desktop first. Save any work open in your browsers. Continue?"));
+            if (MessageBox.Show(this, plan.ToString(), L("정리 확인", "Confirm clean-up"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+
+            if (review.Count > 0)
+                using (var dlg = new ReviewDialog(review))
+                {
+                    if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                    opt.RemoveAutostart = dlg.Selected;
+                }
+
+            var report = SaveReport(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), ReportName()));
+            if (report == null)
+            {
+                Log(L("[X] 보고서를 저장하지 못해 아무것도 바꾸지 않았습니다.", "[X] Could not save the report, so nothing was changed."), LogLevel.Bad);
+                MessageBox.Show(this, L("점검 결과를 저장하지 못해 정리를 취소했습니다.\n\n바탕 화면의 공간과 권한을 확인한 뒤 다시 시도해 주세요.",
+                                        "The check result could not be saved, so the clean-up was canceled.\n\nCheck Desktop space and permissions, then try again."),
+                                L("정리 취소", "Clean-up canceled"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            _lastReport = report;
+            Log(L($"[+] 정리 전 보고서 저장: {report}", $"[+] Report saved before clean-up: {report}"), LogLevel.Action);
+            foreach (var a in opt.RemoveAutostart)
+                Log(L($"    지우기로 고른 항목: [{a.Where}] {a.Name} — {a.Display}", $"    Item chosen for removal: [{a.Where}] {a.Name} - {a.Display}"), LogLevel.Detail);
+
+            // 정리하는 동안: 바닥글을 진행 상태로
+            var busy = Button(L("정리하는 중…", "Cleaning up…"), ButtonVariant.Default, null, large: true);
+            busy.Enabled = false;
+            _footRight.Controls.Clear(); _footRight.Controls.Add(busy);
+            _footLeft.Controls.Clear(); _footLeft.Controls.Add(Link(L("자세히 보기", "Show details"), (s, e) => ShowLog()));
+
+            _cts = new CancellationTokenSource();
+            Log("", LogLevel.Info);
+            Log(L($"===== 정리 시작 {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====", $"===== Clean-up started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====="), LogLevel.Header);
+            FixOutcome outcome;
+            try { outcome = await Task.Run(() => Remediator.Fix(fixes, opt, SafeLog)); }
+            catch (Exception ex) { outcome = new FixOutcome { Failed = 1 }; Log(L("[X] 정리 중 오류: ", "[X] Error during clean-up: ") + ex, LogLevel.Bad); }
+            finally { _cts.Dispose(); _cts = null; }
+
+            Log(outcome.NeedsReboot ? L("[재시작 필요] 사용 중인 파일이 있어 일부를 지우지 못했습니다.", "[Restart needed] Some files are in use and could not be deleted.")
+              : outcome.Failed > 0 ? L($"[주의] {outcome.Failed}건이 실패했습니다.", $"[Note] {outcome.Failed} tasks failed.")
+              : L("[완료] 정리가 끝났습니다.", "[Done] Clean-up finished."), outcome.Failed > 0 || outcome.NeedsReboot ? LogLevel.Bad : LogLevel.Ok);
+            SaveReport(report);   // 정리 결과까지 담아 같은 보고서를 갱신
+            int removed = fixes.Select(f => f.FixDescription).Distinct().Count() + opt.RemoveAutostart.Count;
+            _last = null;
+            ShowDone(outcome, removed, opt.Block);
+            if (wdo) await OfferOfflineScanAsync(report);
+        }
+
+        // ------------------------------------------------------------------
+        // 4. 정리 완료
+        // ------------------------------------------------------------------
+        private void ShowDone(FixOutcome o, int removed, bool blocked)
+        {
+            var body = new List<Control>();
+            if (o.NeedsReboot)
+                body.Add(Alert(IconKind.AlertTriangle, Theme.Destructive, Theme.DestructiveBg, Theme.DestructiveBorder, L("재시작 필요", "RESTART NEEDED"),
+                    L("Windows를 재시작한 뒤 이 프로그램을 한 번 더 실행하세요", "Restart Windows, then run this program once more"),
+                    L("사용 중인 파일이 있어 일부를 지우지 못했습니다. 해킹 파일을 실행시키는 등록은 지웠으므로, 재시작하면 지울 수 있습니다.",
+                      "Some files are in use and could not be deleted. The registry entry that runs them is gone, so they can be deleted after a restart.")));
+            else if (o.Failed > 0)
+                body.Add(Alert(IconKind.AlertTriangle, Theme.Warning, Theme.WarningBg, Theme.WarningBorder, L("일부 실패", "PARTLY FAILED"),
+                    L($"{o.Failed}건을 처리하지 못했습니다", $"{o.Failed} tasks could not be completed"),
+                    L("PC를 재시작한 뒤 다시 점검·정리해 주세요. 무엇이 실패했는지는 「자세히 보기」에 있습니다.", "Restart the PC and check again. Show details lists what failed.")));
+            else
+                body.Add(Alert(IconKind.Check, Theme.Success, Theme.SuccessBg, Theme.SuccessBorder, L("정리 완료", "CLEAN-UP DONE"),
+                    removed > 0 ? L($"해킹 흔적 {removed}건을 정리했습니다", $"{removed} traces were removed") + (blocked ? L(" · 해커 서버를 막았습니다", " · hacker servers blocked") : "")
+                                : (blocked ? L("런처 캐시를 정리하고 해커 서버를 막았습니다", "The launcher cache was cleaned and hacker servers blocked") : L("정리를 마쳤습니다", "Clean-up finished")),
+                    L("다시 점검해서 결과를 확인할 수 있습니다.", "You can check again to confirm.")));
+            if (_lastReport != null)
+                body.Add(Muted(L("점검 결과 파일: ", "Result file: ") + _lastReport, new Padding(0, 0, 0, 14)));
+
+            bool infected = _lastVerdict == Verdict.Infected || _lastVerdict == Verdict.PastInfection;
+            var todo = new List<(string, string)>
+            {
+                (L("비밀번호 바꾸기", "Change passwords"), L("니케(레벨 인피니트) → 구글·네이버·카카오 → 디스코드·스팀 → 은행 순서로. 브라우저에 저장해 둔 비밀번호도.", "Level Infinite (NIKKE), then Google, Discord, Steam, banks. Also every password saved in your browsers.")),
+                (L("「모든 기기에서 로그아웃」", "\"Sign out of all devices\""), L("빼낸 쿠키는 비밀번호 없이도 로그인에 쓰일 수 있습니다.", "Stolen cookies can sign in without the password.")),
+            };
+            if (infected)
+            {
+                todo.Add((L("2단계 인증 켜기", "Turn on 2-step verification"), L("중요한 계정부터.", "Important accounts first.")));
+                todo.Add((L("코인 지갑 옮기기 (해당되면)", "Move crypto (if any)"), L("새 복구 문구로 만든 새 지갑으로.", "To a new wallet with a new recovery phrase.")));
+                todo.Add((L("개발자라면 키 새로 발급", "Developers: reissue keys"), L("GitHub·SSH·클라우드 토큰.", "GitHub, SSH and cloud tokens.")));
+                todo.Add((L("다른 Windows 계정도 점검", "Check other Windows accounts"), L("이 PC를 쓰는 다른 계정으로 로그인해 한 번 더 실행하세요.", "Sign in to each other account on this PC and run this tool again.")));
+            }
+            else if (_lastVerdict != Verdict.Exposed)
+                todo = todo.Take(1).Select(t => (t.Item1, L("9월 27일 이후 런처를 켠 적이 있다면 중요한 비밀번호는 바꿔 두는 게 안전합니다.", "If you used the launcher after Sep 27, changing important passwords is the safe choice."))).ToList();
+
+            body.Add(Heading(L("해야 할 일", "What to do next") ));
+            body.Add(Muted(L("휴대폰 등 다른 기기에서 하세요. 이 프로그램이 대신할 수 없는 일입니다.", "Do these from another device such as your phone. This program cannot do them for you."), new Padding(0, 0, 0, 8)));
+            var items = new List<Control>();
+            foreach (var (t, d) in todo)
+            {
+                items.Add(new CheckBox { Text = t, AutoSize = true, Font = Theme.Font(10f, FontStyle.Bold), BackColor = Color.Transparent, Margin = new Padding(0, 8, 0, 0) });
+                items.Add(Muted(d, new Padding(20, 0, 0, 4)));
+            }
+            body.Add(Layouts.Card(items.ToArray()));
+
+            var notice = Layouts.Card(Layouts.Text(L("레벨 인피니트가 11월 4일 수정을 발표했지만, 해커가 어떻게 들어왔는지는 아직 알려지지 않았습니다. 차단은 그대로 두고, 런처를 다시 열기 전에 런처 캐시를 지우세요. 가장 확실한 방법은 Windows 재설치입니다 (이 프로그램은 알려진 흔적만 지웁니다).",
+                                                    "Level Infinite announced a fix on Nov 4, but how the attacker got in is still unknown. Keep the blocks, and delete the launcher cache before opening the launcher again. Reinstalling Windows is the safest fix (this program removes only known traces)."),
+                                                  9f, FontStyle.Regular, Theme.Caution, new Padding(0)));
+            notice.SetTone(Theme.CautionBg, Theme.CautionBorder);
+            body.Add(notice);
+
+            SetView(body,
+                new Control[]
+                {
+                    Link(L("자세히 보기", "Show details"), (s, e) => ShowLog()),
+                    Link(L("니케 완전 삭제…", "Remove NIKKE…"), async (s, e) => await UninstallAsync()),
+                },
+                new Control[]
+                {
+                    Button(L("다시 점검해서 확인", "Check again"), ButtonVariant.Default, async (s, e) => await ScanAsync(), large: true),
+                    Button(L("닫기", "Close"), ButtonVariant.Outline, (s, e) => Close(), large: true),
+                });
+        }
+
+        // ------------------------------------------------------------------
+        // Defender 오프라인 검사 / 니케 완전 삭제
+        // ------------------------------------------------------------------
+        private async Task OfferOfflineScanAsync(string report)
+        {
+            try
+            {
+                if (File.Exists(WdoMarker) && (DateTime.Now - File.GetLastWriteTime(WdoMarker)).TotalHours < 24)
+                {
+                    Log(L("[-] Windows Defender 오프라인 검사는 최근 24시간 안에 이미 해서 건너뜁니다.", "[-] Skipping the Windows Defender offline scan (already done in the last 24 hours)."), LogLevel.Detail);
+                    return;
+                }
+            }
+            catch { }
+            var q = L("Windows 백신(Defender) 오프라인 검사로 PC 전체를 한 번 더 검사합니다. 이름이 알려진 다른 해킹 도구를 찾아 지웁니다.\n\n" +
+                      "Windows가 꺼진 상태에서 하는 검사라 재부팅이 필요합니다. 재부팅하면 검사 화면이 자동으로 뜨고, 약 15분 뒤 Windows로 돌아옵니다.\n\n" +
+                      "저장하지 않은 작업이 있으면 먼저 저장하세요. 지금 재부팅해서 검사할까요?",
+                      "The Windows Defender offline scan checks the whole PC once more and removes other known hacking tools.\n\n" +
+                      "It runs while Windows is off, so the PC must restart. The scan screen appears by itself, and Windows starts again after about 15 minutes.\n\n" +
+                      "Save any unsaved work first. Restart now for the scan?");
+            if (MessageBox.Show(this, q, L("Windows 백신 정밀 검사", "Windows Defender deep scan"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            {
+                Log(L("[-] 오프라인 검사를 하지 않았습니다.", "[-] Offline scan not started."), LogLevel.Detail);
+                return;
+            }
+            var lines = new List<string>();
+            Logger capture = (m, l) => { lines.Add(m); SafeLog(m, l); };
+            _cts = new CancellationTokenSource();
+            try { await Task.Run(() => Remediator.RunElevated(new List<string> { "WDO" }, capture, out _)); }
+            finally { _cts.Dispose(); _cts = null; }
+            if (lines.Any(l => l.Contains("[WDO] started")))
+            {
+                try { Directory.CreateDirectory(Path.GetDirectoryName(WdoMarker)); File.WriteAllText(WdoMarker, DateTime.Now.ToString("s")); } catch { }
+            }
+            else MessageBox.Show(this, string.Join("\n", lines.Where(l => !l.StartsWith("[*]")).Take(4)), L("Windows 백신 정밀 검사", "Windows Defender deep scan"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SaveReport(report);
+        }
+
+        /// <summary>NIKKE 완전 삭제 (선택, 두 번 확인). 계정·진행 상황은 서버에 있어 지워지지 않는다.</summary>
+        private async Task UninstallAsync()
+        {
+            if (Busy) return;
+            var q1 = L("니케를 계속 하실 분은 [아니요]를 누르세요. 게임은 그대로 둡니다.\n\n" +
+                       "니케를 이 PC에서 완전히 삭제하실 분만 [예]를 누르세요. 다음을 지웁니다:\n" +
+                       "  • 설치 폴더 (게임·런처)\n  • 런처 데이터 폴더\n  • 게임 데이터 폴더 (AppData\\LocalLow, 약 5GB)\n  • 내려받은 설치 파일 (nikkeminiloader…exe)\n" +
+                       "  • 「설치된 앱」 항목, nikkelauncher:// 연결, 게임 설정\n  • 바로가기 (바탕 화면·시작 메뉴)\n\n" +
+                       "계정과 게임 진행은 니케 서버에 있어 지워지지 않습니다. [예]를 누르면 지울 목록을 보여 주고 한 번 더 묻습니다.",
+                       "Keep playing NIKKE? Press [No]. The game is left as it is.\n\n" +
+                       "Only if you want NIKKE removed from this PC completely, press [Yes]. It deletes:\n" +
+                       "  • install folder (game + launcher)\n  • launcher data folder\n  • game data folder (AppData\\LocalLow, about 5 GB)\n  • downloaded installer (nikkeminiloader...exe)\n" +
+                       "  • Installed apps entry, nikkelauncher:// link, game settings\n  • shortcuts (Desktop, Start menu)\n\n" +
+                       "Your account and progress stay on the NIKKE servers. [Yes] shows the list and asks once more.");
+            if (MessageBox.Show(this, q1, L("니케 완전 삭제 (선택)", "Remove NIKKE completely (optional)"), MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                return;
+            var installs = _last?.Installs.ToList() ?? new List<string>();
+            var typed = _pathBox.Text.Trim().Trim('"');
+            if (installs.Count == 0 && typed.Length > 0 && InstallLocator.IsInstall(typed)) installs.Add(typed);
+            var plan = await Task.Run(() => Uninstaller.Plan(installs));
+            if (plan.Count == 0)
+            {
+                MessageBox.Show(this, L("지울 니케 파일·등록이 없습니다.", "Nothing of NIKKE is left to remove."), L("니케 완전 삭제", "Remove NIKKE"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var list = new StringBuilder(L("지울 항목:\n\n", "To be removed:\n\n"));
+            foreach (var f in plan.Folders) list.AppendLine("• " + f);
+            foreach (var f in plan.Files) list.AppendLine(L("• 설치 파일: ", "• installer: ") + f);
+            if (plan.Links.Count > 0) list.AppendLine(L($"• 바로가기 {plan.Links.Count}개", $"• {plan.Links.Count} shortcut(s)"));
+            foreach (var k in plan.UserKeys) list.AppendLine("• HKCU\\" + k);
+            foreach (var k in plan.MachineKeys) list.AppendLine("• HKLM\\" + k.Substring(3));
+            list.AppendLine(L("\n지운 뒤에는 되돌릴 수 없습니다. 정말 삭제할까요?", "\nThis cannot be undone. Really delete all of it?"));
+            if (MessageBox.Show(this, list.ToString(), L("니케 완전 삭제 — 마지막 확인", "Remove NIKKE - final confirmation"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                return;
+            var report = SaveReport(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), ReportName()));
+            if (report == null) { Log(L("[X] 보고서를 저장하지 못해 아무것도 지우지 않았습니다.", "[X] Could not save the report, so nothing was deleted."), LogLevel.Bad); return; }
+
+            _cts = new CancellationTokenSource();
+            Log("", LogLevel.Info);
+            Log(L($"===== 니케 완전 삭제 (사용자 선택) {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====", $"===== Remove NIKKE (user choice) {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====="), LogLevel.Header);
+            int failed;
+            try
+            {
+                failed = await Task.Run(() =>
+                {
+                    int fl = Uninstaller.Execute(plan, SafeLog, out var elevated);
+                    if (elevated.Count > 0) fl += Remediator.RunElevated(elevated, SafeLog, out _);
+                    return fl;
+                });
+            }
+            finally { _cts.Dispose(); _cts = null; }
+            Log(failed > 0 ? L("[주의] 일부 삭제 실패. PC를 재시작한 뒤 다시 실행하세요.", "[Note] Some items could not be removed. Restart the PC and run again.")
+                           : L("[완료] 니케 삭제 완료. 재설치는 공식 홈페이지에서 런처를 새로 받으세요.", "[Done] NIKKE removed. To reinstall, get a new launcher from the official website."),
+                failed > 0 ? LogLevel.Bad : LogLevel.Ok);
+            SaveReport(report);
+            MessageBox.Show(this, failed > 0 ? L("일부를 지우지 못했습니다. PC를 재시작한 뒤 다시 실행하세요.", "Some items could not be removed. Restart the PC and run again.")
+                                             : L("니케를 이 PC에서 지웠습니다.", "NIKKE was removed from this PC."),
+                L("니케 완전 삭제", "Remove NIKKE"), MessageBoxButtons.OK, failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        }
+
+        // ------------------------------------------------------------------
+        // 기록 · 보고서 · 언어
+        // ------------------------------------------------------------------
+        private void ShowLog()
+        {
+            if (_logForm == null || _logForm.IsDisposed)
+            {
+                _logForm = new Form
+                {
+                    Text = L("자세히 보기 — 점검 기록", "Details - check log"), Size = new Size(900, 600), StartPosition = FormStartPosition.CenterParent,
+                    ShowInTaskbar = false, Font = Font, BackColor = Theme.Card,
+                };
+                _logForm.FormClosing += (s, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; _logForm.Hide(); } };
+                var foot = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 56, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(12, 10, 12, 10), BackColor = Theme.Card };
+                foot.Controls.Add(Button(L("닫기", "Close"), ButtonVariant.Outline, (s, e) => _logForm.Hide()));
+                foot.Controls.Add(Button(L("보고서 저장", "Save report"), ButtonVariant.Default, (s, e) => SaveLogDialog()));
+                _logForm.Controls.Add(_logBox);
+                _logForm.Controls.Add(foot);
+            }
+            if (!_logForm.Visible) _logForm.Show(this);
+            _logForm.Activate();
         }
 
         private void SwitchLanguage()
@@ -188,429 +804,14 @@ namespace NikkeChecker
             catch { }
         }
 
-        private void AddItem(TableLayoutPanel t, CheckId id, string text)
-        {
-            var box = new CheckBox { Text = text, Checked = true, AutoSize = true, Margin = new Padding(3, 4, 3, 2) };
-            var status = new Label { Text = "", AutoSize = true, Anchor = AnchorStyles.Right, Margin = new Padding(12, 6, 3, 2) };
-            t.Controls.Add(box, 0, t.RowCount);
-            t.Controls.Add(status, 1, t.RowCount);
-            t.RowCount++;
-            box.CheckedChanged += (s, e) => UpdateButtons();
-            _items.Add(new Item { Id = id, Box = box, Status = status });
-        }
-
-        private static void AddSpanning(TableLayoutPanel t, Control c)
-        {
-            t.Controls.Add(c, 0, t.RowCount);
-            t.SetColumnSpan(c, 2);
-            t.RowCount++;
-        }
-
-        private void SetupOption(CheckBox c, string text, bool on)
-        {
-            c.Text = text; c.Checked = on; c.AutoSize = true;
-            c.CheckedChanged += (s, e) => UpdateButtons();
-        }
-
-        private static void SetupButton(Button b, string text, EventHandler onClick)
-        {
-            b.Text = text; b.AutoSize = true; b.MinimumSize = new Size(100, 32); b.Click += onClick;
-        }
-
-        private bool Busy => _cts != null;
-
-        private void UpdateButtons()
-        {
-            _scanBtn.Enabled = !Busy && _items.Any(i => i.Box.Checked);
-            bool hasFix = _last != null && (_last.Fixable.Any() || _last.Review.Any()) && _fixBox.Checked;
-            _fixBtn.Enabled = !Busy && _last != null && (hasFix || _tbsBox.Checked || _blockBox.Checked || _wdoBox.Checked);
-            _uninstallBtn.Enabled = !Busy && _last != null;
-            _stopBtn.Enabled = Busy;
-            foreach (var i in _items) i.Box.Enabled = !Busy;
-            _fixBox.Enabled = _tbsBox.Enabled = _blockBox.Enabled = _wdoBox.Enabled = !Busy;
-            _progress.MarqueeAnimationSpeed = Busy ? 30 : 0;
-            bool logsOn = _items.First(i => i.Id == CheckId.InstallLogs).Box.Checked;
-            _pathBox.Enabled = _browseBtn.Enabled = logsOn && !Busy;
-        }
-
-        private void BrowseInstallPath()
-        {
-            using (var d = new FolderBrowserDialog { Description = L("NIKKE 설치 폴더(Launcher 폴더가 들어 있는 폴더)를 선택하세요", "Select the NIKKE install folder (the folder that holds the Launcher folder)") })
-                if (d.ShowDialog(this) == DialogResult.OK) _pathBox.Text = d.SelectedPath;
-        }
-
-        // ------------------------------------------------------------------
-        private async Task ScanAsync()
-        {
-            var opt = new ScanOptions { InstallPath = _pathBox.Text, AuditSystem = () => Remediator.RunAudit(SafeLog) };
-            foreach (var i in _items.Where(i => i.Box.Checked)) opt.Checks.Add(i.Id);
-            foreach (var i in _items) SetStatus(i, i.Box.Checked ? L("점검 중…", "Checking…") : L("미점검", "Skipped"), Color.Gray);
-
-            _last = null;
-            _cts = new CancellationTokenSource();
-            UpdateButtons();
-            _summary.Text = L("점검 중…", "Checking…"); _summary.ForeColor = SystemColors.ControlText;
-            Log("", LogLevel.Info);
-            Log(L($"===== 점검 시작 {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====", $"===== Check started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====="), LogLevel.Header);
-
-            try
-            {
-                var token = _cts.Token;
-                var r = await Task.Run(() => new Scanner(SafeLog, token).Run(opt));
-                _last = r;
-                if (r.Installs.Count > 0 && string.IsNullOrWhiteSpace(_pathBox.Text)) _pathBox.Text = r.Installs[0];
-
-                foreach (var i in _items.Where(i => opt.Checks.Contains(i.Id)))
-                {
-                    var w = r.Worst(i.Id);
-                    if (w == Severity.Critical && r.Findings.Where(f => f.Check == i.Id && f.Severity == Severity.Critical).All(f => f.Past))
-                        SetStatus(i, L("● 과거 기록", "● Past record"), Color.Firebrick);
-                    else if (w == Severity.Critical) SetStatus(i, L("● 감염 흔적", "● Infected"), Color.Firebrick);
-                    else if (w == Severity.Warning) SetStatus(i, L("▲ 노출 흔적", "▲ Exposed"), Color.DarkOrange);
-                    else if (w == Severity.Review)
-                    {
-                        int n = r.Findings.Count(f => f.Check == i.Id && f.Severity == Severity.Review);
-                        bool mal = r.Review.Any(a => a.Defender == "malware");
-                        SetStatus(i, L($"◆ 확인 필요 {n}건", $"◆ Check {n}") + (mal ? L(" (악성 포함)", " (malware)") : ""), mal ? Color.Firebrick : Color.DarkOrange);
-                    }
-                    else if (r.Unknown.ContainsKey(i.Id)) SetStatus(i, L("? 일부 확인 불가", "? Partly unchecked"), Color.DarkGoldenrod);
-                    else if (i.Id == CheckId.Protection) SetStatus(i, L("ⓘ 결과 참고", "ⓘ See log"), Color.SteelBlue);
-                    else SetStatus(i, L("○ 이상 없음", "○ OK"), Color.SeaGreen);
-                }
-                ReportVerdict(r);
-            }
-            catch (OperationCanceledException)
-            {
-                Log(L("[!] 사용자가 점검을 중지했습니다.", "[!] The check was stopped."), LogLevel.Warn);
-                _summary.Text = L("점검 중지됨", "Check stopped"); _summary.ForeColor = Color.DarkOrange;
-                foreach (var i in _items.Where(i => i.Status.Text == L("점검 중…", "Checking…"))) SetStatus(i, L("중지됨", "Stopped"), Color.Gray);
-            }
-            catch (Exception ex)
-            {
-                Log(L("[X] 점검 중 오류: ", "[X] Error during the check: ") + ex, LogLevel.Bad);
-                _summary.Text = L("점검 중 오류 발생", "An error occurred during the check"); _summary.ForeColor = Color.Firebrick;
-            }
-            finally
-            {
-                _cts.Dispose(); _cts = null;
-                UpdateButtons();
-            }
-        }
-
-        private void ReportVerdict(ScanResult r)
-        {
-            int nFix = r.Fixable.Count();
-            int nReview = r.Review.Count();
-            Log("=================================================", LogLevel.Header);
-            switch (r.Verdict)
-            {
-                case Verdict.Infected:
-                    _summary.Text = L($"감염 — 악성 에이전트가 내려받아졌거나 실행된 흔적이 있습니다. (제거 대상 {nFix}건)",
-                                      $"INFECTED - the malicious agent was downloaded or ran on this PC. ({nFix} items to remove)");
-                    _summary.ForeColor = Color.Firebrick;
-                    Log(L("[판정] 감염: 런처가 열려 있는 동안 공격자가 이 PC 에서 명령을 실행할 수 있었습니다.",
-                          "[Verdict] INFECTED: while the launcher was open, the attacker could run commands on this PC."), LogLevel.Bad);
-                    Guide(new[]
-                    {
-                        L("1. 지금 런처를 닫고 이 PC 를 네트워크에서 분리하세요.", "1. Close the launcher now and disconnect this PC from the network."),
-                        L("2. [조치 실행] 을 누르세요. 보고서가 바탕화면에 먼저 저장된 뒤 레지스트리 키 → 프로세스 → DLL → 런처 캐시 순으로 제거합니다.",
-                          "2. Press [Clean up]. The report is saved to the Desktop first, then the registry key, processes, DLL and launcher cache are removed in that order."),
-                        L("3. DLL 이 사용 중이라 지워지지 않으면 Windows 를 재시작한 뒤 이 도구로 다시 점검·조치하세요.",
-                          "3. If the DLL is in use and cannot be deleted, restart Windows and run this tool again."),
-                        L("4. 깨끗한 기기(휴대폰 등)에서 비밀번호 변경: NIKKE/Level Infinite → 구글·네이버·카카오 → 디스코드·스팀 → 은행, 그리고 브라우저에 저장된 모든 비밀번호. 2단계 인증도 켜세요.",
-                          "4. From a clean device (e.g. your phone), change passwords: Level Infinite (NIKKE), Google, Discord, Steam, banks, and every password saved in your browsers. Turn on 2-step verification."),
-                        L("5. 각 서비스에서 「모든 기기에서 로그아웃」 (탈취된 쿠키는 비밀번호 없이도 쓰일 수 있음). 이 PC 의 브라우저 쿠키도 브라우저 설정에서 삭제하세요.",
-                          "5. Use \"Sign out of all devices\" on each service (stolen cookies work without the password). Also clear this PC's browser cookies in the browser settings."),
-                        L("6. 이 PC 에 저장된 API 토큰·SSH 키·클라우드 CLI 자격 증명(.ssh, .aws, gh 등)을 폐기하고 재발급하세요.",
-                          "6. Revoke and reissue API tokens, SSH keys and cloud CLI credentials stored on this PC (.ssh, .aws, gh, etc.)."),
-                        L("7. 암호화폐가 있다면 깨끗한 기기에서 만든 새 시드의 지갑으로 옮기세요.",
-                          "7. If you hold cryptocurrency, move it to a wallet with a new seed phrase made on a clean device."),
-                        L("8. 레벨 인피니트가 11월 4일 수정을 발표했지만, 공격자가 CDN 에 어떻게 접근했는지는 아직 알려지지 않았습니다. 차단은 유지하고, 런처를 다시 열기 전에 런처 캐시(tbs_cache)를 지우세요. 가장 확실한 방법은 Windows 재설치입니다.",
-                          "8. Level Infinite announced a fix on Nov 4, but how the attacker got into the CDN is still unknown. Keep the blocks, and delete the launcher cache (tbs_cache) before opening the launcher again. Reinstalling Windows is the safest fix."),
-                        L("9. 다른 Windows 사용자 계정도 이 PC 를 쓴다면, 그 계정으로 로그인해 이 도구를 한 번 더 실행하세요.",
-                          "9. If other Windows user accounts use this PC, sign in to each and run this tool again."),
-                    });
-                    break;
-                case Verdict.PastInfection:
-                    _summary.Text = L("감염됐던 기록 (과거 기록) — 해킹 프로그램이 전에 이 PC 에서 실행됐습니다. 지금 남은 해킹 파일은 없습니다.",
-                                      "PAST INFECTION (records only) - the hacking program ran on this PC before. No hacking files remain now.");
-                    _summary.ForeColor = Color.Firebrick;
-                    Log(L("[판정] 감염됐던 기록 (과거 기록): 해킹 프로그램이 전에 이 PC 에서 실행됐습니다. 지금 남아 있는 해킹 파일은 없습니다.",
-                          "[Verdict] PAST INFECTION (records only): the hacking program ran on this PC before. No hacking files remain now."), LogLevel.Bad);
-                    Log(L("       런처 기록 파일(debug.log)에 남은 기록이라 다시 검사해도 계속 나옵니다. 지금 PC 에 해킹 파일이 남아 있다는 뜻은 아닙니다.",
-                          "       These stay in the launcher log (debug.log), so they appear on every run. It does not mean hacking files are still on this PC."), LogLevel.Warn);
-                    Guide(new[]
-                    {
-                        L("1. 그때 비밀번호가 빠져나갔을 수 있습니다. 깨끗한 기기에서 비밀번호를 바꾸고 「모든 기기에서 로그아웃」 하세요 (NIKKE/Level Infinite → 구글·네이버·카카오 → 디스코드·스팀 → 은행). 2단계 인증도 켜세요.",
-                          "1. Passwords may have been stolen back then. From a clean device change them and sign out of all devices (Level Infinite, Google, Discord, Steam, banks). Turn on 2-step verification."),
-                        L("2. 이 PC 에 저장된 API 토큰·SSH 키·클라우드 CLI 자격 증명을 폐기하고 재발급하고, 암호화폐는 새 시드의 지갑으로 옮기세요.",
-                          "2. Revoke and reissue API tokens, SSH keys and cloud CLI credentials stored on this PC, and move crypto to a wallet with a new seed phrase."),
-                        L("3. [조치 실행] 으로 런처 캐시(tbs_cache) 삭제와 hosts·방화벽 차단을 하세요.", "3. Use [Clean up] to delete the launcher cache (tbs_cache) and block hosts/firewall."),
-                        L("4. " + "레벨 인피니트가 11월 4일 수정을 발표했지만, 공격자가 CDN 에 어떻게 접근했는지는 아직 알려지지 않았습니다. 차단은 유지하고, 런처를 다시 열기 전에 런처 캐시(tbs_cache)를 지우세요.", "4. " + "Level Infinite announced a fix on Nov 4, but how the attacker got into the CDN is still unknown. Keep the blocks, and delete the launcher cache (tbs_cache) before opening the launcher again."),
-                    });
-                    break;
-                case Verdict.Exposed:
-                    _summary.Text = L("노출 — 런처가 악성 스크립트를 불러왔지만 에이전트 실행 흔적은 없습니다.",
-                                      "EXPOSED - the launcher loaded the malicious script, but there is no sign the agent ran.");
-                    _summary.ForeColor = Color.DarkOrange;
-                    Log(L("[판정] 노출: 악성 로더는 실행됐지만 에이전트가 실행된 흔적은 찾지 못했습니다.",
-                          "[Verdict] EXPOSED: the malicious loader ran, but no sign that the agent ran was found."), LogLevel.Warn);
-                    Guide(new[]
-                    {
-                        L("1. 니케 설치 폴더를 찾지 못했다면 경로를 지정해 다시 점검하세요. debug.log 에 에이전트 실행 기록이 있으면 '감염'으로 바뀝니다.",
-                          "1. If the NIKKE install folder was not found, enter its path and check again. Agent runs in debug.log change the verdict to INFECTED."),
-                        L("2. [조치 실행] 으로 런처 캐시(tbs_cache) 삭제와 hosts·방화벽 차단을 하세요.",
-                          "2. Use [Clean up] to delete the launcher cache (tbs_cache) and block hosts/firewall."),
-                        L("3. 9월 27일 이후 런처를 연 적이 있다면 감염으로 간주하고 비밀번호 변경·「모든 기기에서 로그아웃」·토큰 폐기를 하세요.",
-                          "3. If you opened the launcher on or after Sep 27, treat the PC as infected: change passwords, sign out of all devices and revoke tokens."),
-                        L("4. 레벨 인피니트가 11월 4일 수정을 발표했지만, 공격자가 CDN 에 어떻게 접근했는지는 아직 알려지지 않았습니다. 차단은 유지하고, 런처를 다시 열기 전에 런처 캐시(tbs_cache)를 지우세요.",
-                          "4. Level Infinite announced a fix on Nov 4, but how the attacker got into the CDN is still unknown. Keep the blocks, and delete the launcher cache (tbs_cache) before opening the launcher again."),
-                    });
-                    break;
-                case Verdict.NotFound:
-                    _summary.Text = L("NIKKE 설치 폴더와 런처 데이터를 찾지 못했습니다.", "No NIKKE install folder or launcher data was found.");
-                    _summary.ForeColor = Color.DarkGoldenrod;
-                    Log(L("[판정] NIKKE 를 찾지 못함: 다른 위치에 설치했다면 설치 경로를 지정해 다시 점검하세요.",
-                          "[Verdict] NIKKE not found: if it is installed elsewhere, enter the install path and check again."), LogLevel.Warn);
-                    Log(L("       런처를 이미 지웠다면 지난 실행 기록도 함께 지워져, 그동안 감염됐었는지는 알 수 없습니다.",
-                          "       If you already deleted the launcher, its logs are gone too, so a past infection cannot be confirmed."), LogLevel.Warn);
-                    break;
-                default:
-                    _summary.Text = L("선택한 항목에서 악성 흔적이 발견되지 않았습니다. (흔적이 없다고 깨끗함이 보장되지는 않습니다)",
-                                      "No known traces were found in the selected checks. (Finding nothing does not prove the PC is clean.)");
-                    _summary.ForeColor = Color.SeaGreen;
-                    Log(L("[판정] 흔적 없음: 선택한 항목에서 악성 흔적을 찾지 못했습니다.", "[Verdict] No known traces in the selected checks."), LogLevel.Ok);
-                    Guide(new[]
-                    {
-                        L("1. 런처를 다시 열기 전에 런처 캐시(tbs_cache)를 삭제하고 hosts·방화벽 차단을 하세요 ([조치 실행]).",
-                          "1. Before opening the launcher again, delete the launcher cache (tbs_cache) and block hosts/firewall ([Clean up])."),
-                        L("2. 9월 27일 이후 런처를 연 적이 있다면 중요한 비밀번호는 바꿔 두는 게 안전합니다 (10월 23일 이후라면 특히).",
-                          "2. If you used the launcher after Sep 27, changing important passwords is the safe choice (especially after Oct 23)."),
-                        L("3. 레벨 인피니트가 11월 4일 수정을 발표했지만, 공격자가 CDN 에 어떻게 접근했는지는 아직 알려지지 않았습니다. 차단은 유지하고, 런처를 다시 열기 전에 런처 캐시(tbs_cache)를 지우세요.",
-                          "3. Level Infinite announced a fix on Nov 4, but how the attacker got into the CDN is still unknown. Keep the blocks, and delete the launcher cache (tbs_cache) before opening the launcher again."),
-                    });
-                    break;
-            }
-            if (nReview > 0)
-            {
-                Log(L($"[확인 필요] 9월 27일 이후 생긴 서명 없는 자동 실행 프로그램 {nReview}개 — 해커가 따로 깔았을 수 있습니다. 직접 설치한 것이면 괜찮습니다.",
-                      $"[Check] {nReview} unsigned autostart programs new since Sep 27 - the hacker may have installed them. Programs you installed yourself are fine."), LogLevel.Warn);
-                Log(L("       [조치 실행] 에서 하나씩 골라 지울 수 있습니다. 직접 설치하지 않은 게 있으면 Windows 재설치를 권합니다.",
-                      "       You can pick which ones to delete in [Clean up]. If any was not installed by you, reinstalling Windows is recommended."), LogLevel.Warn);
-            }
-            if (nFix > 0) Log(L($"[조치 대상] {nFix}건 — [조치 실행] 으로 제거할 수 있습니다.", $"[To remove] {nFix} items - press [Clean up] to remove them."), LogLevel.Info);
-            if (r.Unreadable.Count > 0)
-            {
-                Log(L($"[참고] 읽지 못해 검사가 불완전한 파일 {r.Unreadable.Count}개 (최대 50개 표시):", $"[Note] Files that could not be fully checked: {r.Unreadable.Count} (up to 50 shown):"), LogLevel.Warn);
-                foreach (var u in r.Unreadable.Distinct().Take(50)) Log("        " + u, LogLevel.Detail);
-            }
-        }
-
-        private void Guide(IEnumerable<string> lines)
-        {
-            Log(L("[해야 할 일]", "[What to do]"), LogLevel.Header);
-            foreach (var l in lines) Log("  " + l, LogLevel.Info);
-        }
-
-        private async Task FixAsync()
-        {
-            var opt = new FixOptions
-            {
-                DeleteFindings = _fixBox.Checked, AlwaysDeleteTbsCache = _tbsBox.Checked,
-                Block = _blockBox.Checked,
-            };
-            var fixes = opt.DeleteFindings && _last != null ? _last.Fixable.ToList() : new List<Finding>();
-            var review = opt.DeleteFindings && _last != null ? _last.Review.ToList() : new List<AutostartItem>();
-            bool wdo = _wdoBox.Checked;
-
-            var plan = new StringBuilder(L("다음 작업을 실행합니다:\n\n", "The following will be done:\n\n"));
-            foreach (var d in fixes.Select(f => f.FixDescription).Distinct().Take(25)) plan.AppendLine("• " + d);
-            if (fixes.Count > 25) plan.AppendLine(L($"• … 외 {fixes.Count - 25}건", $"• … {fixes.Count - 25} more"));
-            if (opt.AlwaysDeleteTbsCache) plan.AppendLine(L("• 런처 캐시(tbs_cache) 삭제", "• Delete the launcher cache (tbs_cache)"));
-            if (fixes.Any(f => f.Browser != null)) plan.AppendLine(L("• 관련 브라우저 강제 종료", "• Close the affected browsers"));
-            if (fixes.Count > 0 || opt.AlwaysDeleteTbsCache) plan.AppendLine(L("• NIKKE 런처 강제 종료", "• Close the NIKKE launcher"));
-            if (review.Count > 0) plan.AppendLine(L($"• 「확인 필요」 자동 실행 프로그램 {review.Count}개 — 다음 창에서 지울 것을 직접 고릅니다",
-                                                    $"• {review.Count} autostart programs to check - you pick which to delete in the next window"));
-            if (opt.Block) plan.AppendLine(L($"• hosts 도메인 차단, 방화벽 IP 차단 ({string.Join(", ", Iocs.C2Ips)}) — UAC 요청",
-                                             $"• Block the domains in hosts and the IPs in the firewall ({string.Join(", ", Iocs.C2Ips)}) - UAC prompt"));
-            if (wdo) plan.AppendLine(L("• 마지막에 Windows Defender 오프라인 검사 (재부팅 전에 한 번 더 묻습니다)", "• Finally, a Windows Defender offline scan (you are asked again before the restart)"));
-            plan.AppendLine(L("\n실행 전에 현재 보고서를 바탕화면에 저장합니다 (삭제하면 증거가 사라지므로).", "\nThe current report is saved to the Desktop first (deleting removes the evidence)."));
-            plan.AppendLine(L("브라우저에서 작업 중인 내용이 있다면 먼저 저장해 주세요. 계속할까요?", "Save any work open in your browsers first. Continue?"));
-            if (MessageBox.Show(this, plan.ToString(), L("조치 확인", "Confirm clean-up"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-
-            if (review.Count > 0)
-            {
-                using (var dlg = new ReviewDialog(review, Font))
-                {
-                    if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                    opt.RemoveAutostart = dlg.Selected;
-                }
-            }
-
-            var report = SaveReport(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), ReportName()));
-            if (report == null)
-            {
-                // 증거가 남지 않은 채로 지우지 않는다
-                Log(L("[X] 보고서를 저장하지 못해 아무것도 바꾸지 않았습니다. 바탕화면 공간·권한을 확인한 뒤 다시 시도하세요.",
-                      "[X] Could not save the report, so nothing was changed. Check Desktop space/permissions and try again."), LogLevel.Bad);
-                MessageBox.Show(this, L("보고서를 저장하지 못해 조치를 취소했습니다.\n\n바탕화면의 공간과 권한을 확인한 뒤 다시 시도해 주세요.",
-                                        "The report could not be saved, so the clean-up was canceled.\n\nCheck Desktop space and permissions, then try again."),
-                                L("조치 취소", "Clean-up canceled"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            Log(L($"[+] 조치 전 보고서 저장: {report}", $"[+] Report saved before clean-up: {report}"), LogLevel.Action);
-            foreach (var a in opt.RemoveAutostart)
-                Log(L($"    삭제하기로 고른 자동 실행 항목: [{a.Where}] {a.Name} — {a.Display}", $"    Autostart item chosen for deletion: [{a.Where}] {a.Name} - {a.Display}"), LogLevel.Detail);
-
-            _cts = new CancellationTokenSource();
-            UpdateButtons();
-            Log("", LogLevel.Info);
-            Log(L($"===== 조치 시작 {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====", $"===== Clean-up started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====="), LogLevel.Header);
-            FixOutcome outcome;
-            try { outcome = await Task.Run(() => Remediator.Fix(fixes, opt, SafeLog)); }
-            catch (Exception ex) { outcome = new FixOutcome { Failed = 1 }; Log(L("[X] 조치 중 오류: ", "[X] Error during clean-up: ") + ex, LogLevel.Bad); }
-            finally { _cts.Dispose(); _cts = null; }
-
-            Log("=================================================", LogLevel.Header);
-            string msg;
-            if (outcome.NeedsReboot)
-            {
-                Log(L("[재시작 필요] 사용 중인 파일이 있어 일부를 지우지 못했습니다. 레지스트리 키는 제거됐으므로 Windows 를 재시작한 뒤 이 도구로 다시 점검·조치하세요.",
-                      "[Restart needed] Some files are in use and could not be deleted. The registry key is gone, so restart Windows and run this tool again."), LogLevel.Bad);
-                _summary.Text = L("Windows 재시작 후 다시 점검·조치가 필요합니다.", "Restart Windows, then check and clean up again."); _summary.ForeColor = Color.Firebrick;
-                msg = L("사용 중인 파일이 있어 일부를 지우지 못했습니다.\n\nWindows 를 재시작한 뒤 이 도구를 다시 실행해 점검·조치해 주세요.",
-                        "Some files are in use and could not be deleted.\n\nRestart Windows, then run this tool again.");
-            }
-            else if (outcome.Failed > 0)
-            {
-                Log(L($"[주의] {outcome.Failed}건이 실패했습니다. PC 재시작 후 다시 점검·조치해 주세요.", $"[Note] {outcome.Failed} tasks failed. Restart the PC and run the tool again."), LogLevel.Bad);
-                _summary.Text = L($"{outcome.Failed}건 실패 — 재시작 후 다시 시도하세요.", $"{outcome.Failed} failed - restart and try again."); _summary.ForeColor = Color.Firebrick;
-                msg = L($"{outcome.Failed}건의 작업이 실패했습니다. 재시작 후 다시 시도해 주세요.", $"{outcome.Failed} tasks failed. Restart the PC and try again.");
-            }
-            else
-            {
-                Log(L("[완료] 조치가 끝났습니다. [점검 시작] 으로 다시 점검해 결과를 확인하세요.", "[Done] Clean-up finished. Press [Start check] to check again."), LogLevel.Ok);
-                _summary.Text = L("조치 완료 — 다시 점검하여 확인하세요.", "Clean-up done - check again to confirm."); _summary.ForeColor = Color.SeaGreen;
-                msg = L("조치가 완료되었습니다. 다시 점검하여 결과를 확인하세요.", "Clean-up finished. Check again to confirm the result.");
-            }
-            if (fixes.Any(f => f.Severity == Severity.Critical))
-                msg += L("\n\n감염 흔적이 있었으므로 깨끗한 기기에서 모든 계정의 비밀번호 변경과 「모든 기기에서 로그아웃」을 해 주세요.",
-                         "\n\nInfection traces were found, so from a clean device change all your passwords and sign out of all devices.");
-            _last = null; // 조치 후에는 재점검을 거쳐야 다시 조치 가능
-            UpdateButtons();
-            SaveReport(report);   // 조치 결과까지 담아 같은 보고서를 갱신
-            MessageBox.Show(this, msg, L("조치 결과", "Clean-up result"), MessageBoxButtons.OK, outcome.Failed == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
-
-            if (wdo) await OfferOfflineScanAsync(report);
-        }
-
-        /// <summary>
-        /// NIKKE 완전 삭제 (선택, 두 번 동의 — 햄찌 v4.4·v4.5). 니케를 계속 할 사람은 쓰지 않는다.
-        /// 계정·진행 상황은 니케 서버에 있어 지워지지 않는다. 런처가 깔아 둔 실행 파일은 실행하지 않는다.
-        /// </summary>
-        private async Task UninstallAsync()
-        {
-            var q1 = L("니케를 계속 하실 분은 [아니요]를 누르세요. 게임은 그대로 둡니다.\n\n" +
-                       "니케를 이 PC 에서 완전히 삭제하실 분만 [예]를 누르세요. 다음을 지웁니다:\n" +
-                       "  • 설치 폴더 (게임·런처, 실행 파일 포함)\n  • 런처 데이터 폴더 (AppData\\Roaming\\nikke_launcher…)\n" +
-                       "  • 게임 데이터 폴더 (AppData\\LocalLow, 약 5GB)\n  • 내려받은 설치 파일 (nikkeminiloader…exe)\n" +
-                       "  • 레지스트리: 「설치된 앱」 항목, nikkelauncher:// 연결, 게임 설정\n  • 바로가기 (바탕 화면·시작 메뉴)\n\n" +
-                       "계정과 게임 진행은 니케 서버에 있어 지워지지 않습니다. [예]를 누르면 지울 목록을 보여 주고 한 번 더 묻습니다.",
-                       "Keep playing NIKKE? Press [No]. The game is left as it is.\n\n" +
-                       "Only if you want NIKKE removed from this PC completely, press [Yes]. It deletes:\n" +
-                       "  • install folder (game + launcher, executables included)\n  • launcher data folder (AppData\\Roaming\\nikke_launcher...)\n" +
-                       "  • game data folder (AppData\\LocalLow, about 5 GB)\n  • downloaded installer (nikkeminiloader...exe)\n" +
-                       "  • registry: Installed apps entry, nikkelauncher:// link, game settings\n  • shortcuts (Desktop, Start menu)\n\n" +
-                       "Your account and game progress stay on the NIKKE servers. [Yes] shows the list and asks once more.");
-            if (MessageBox.Show(this, q1, L("니케 완전 삭제 (선택)", "Remove NIKKE completely (optional)"), MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
-            {
-                Log(L("[-] 니케는 그대로 둡니다.", "[-] NIKKE is left as it is."), LogLevel.Detail);
-                return;
-            }
-            var installs = _last?.Installs.ToList() ?? new List<string>();
-            if (installs.Count == 0 && !string.IsNullOrWhiteSpace(_pathBox.Text) && InstallLocator.IsInstall(_pathBox.Text.Trim().Trim('"'))) installs.Add(_pathBox.Text.Trim().Trim('"'));
-            var plan = await Task.Run(() => Uninstaller.Plan(installs));
-            if (plan.Count == 0)
-            {
-                MessageBox.Show(this, L("지울 니케 파일·등록이 없습니다.", "Nothing of NIKKE is left to remove."), L("니케 완전 삭제", "Remove NIKKE"), MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-            var list = new StringBuilder(L("지울 항목:\n\n", "To be removed:\n\n"));
-            foreach (var f in plan.Folders) list.AppendLine("• " + f);
-            foreach (var f in plan.Files) list.AppendLine(L("• 설치 파일: ", "• installer: ") + f);
-            if (plan.Links.Count > 0) list.AppendLine(L($"• 바로가기 {plan.Links.Count}개 (바탕 화면·시작 메뉴)", $"• {plan.Links.Count} shortcut(s) (Desktop, Start menu)"));
-            foreach (var k in plan.UserKeys) list.AppendLine(L("• 레지스트리: HKCU\\", "• registry: HKCU\\") + k);
-            foreach (var k in plan.MachineKeys) list.AppendLine(L("• 레지스트리: HKLM\\", "• registry: HKLM\\") + k.Substring(3));
-            list.AppendLine(L("\n지운 뒤에는 되돌릴 수 없습니다. 정말 삭제할까요?", "\nThis cannot be undone. Really delete all of it?"));
-            if (MessageBox.Show(this, list.ToString(), L("니케 완전 삭제 — 마지막 확인", "Remove NIKKE - final confirmation"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
-            {
-                Log(L("[-] 니케는 그대로 둡니다.", "[-] NIKKE is left as it is."), LogLevel.Detail);
-                return;
-            }
-            var report = SaveReport(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), ReportName()));
-            if (report == null) { Log(L("[X] 보고서를 저장하지 못해 아무것도 지우지 않았습니다.", "[X] Could not save the report, so nothing was deleted."), LogLevel.Bad); return; }
-
-            _cts = new CancellationTokenSource(); UpdateButtons();
-            Log("", LogLevel.Info);
-            Log(L($"===== 니케 완전 삭제 (사용자 선택) {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====", $"===== Remove NIKKE (user choice) {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====="), LogLevel.Header);
-            int failed = 0;
-            try
-            {
-                failed = await Task.Run(() =>
-                {
-                    int fl = Uninstaller.Execute(plan, SafeLog, out var elevated);
-                    if (elevated.Count > 0) fl += Remediator.RunElevated(elevated, SafeLog, out _);
-                    return fl;
-                });
-            }
-            finally { _cts.Dispose(); _cts = null; UpdateButtons(); }
-            if (failed > 0)
-                Log(L("[주의] 일부 삭제 실패. PC 를 재시작한 뒤 다시 실행하세요.", "[Note] Some items could not be removed. Restart the PC and run again."), LogLevel.Bad);
-            else
-                Log(L("[완료] 니케 삭제 완료. 재설치는 공식 홈페이지에서 런처를 새로 받으세요.", "[Done] NIKKE removed. To reinstall, get a new launcher from the official website."), LogLevel.Ok);
-            SaveReport(report);
-        }
-
-        /// <summary>Defender 오프라인 검사: 재부팅이 필요하므로 한 번 더 묻는다. 24시간 안에 이미 했으면 건너뜀.</summary>
-        private async Task OfferOfflineScanAsync(string report)
-        {
-            try
-            {
-                if (File.Exists(WdoMarker) && (DateTime.Now - File.GetLastWriteTime(WdoMarker)).TotalHours < 24)
-                {
-                    Log(L("[-] Windows Defender 오프라인 검사는 최근 24시간 안에 이미 해서 건너뜁니다.", "[-] Skipping the Windows Defender offline scan (already done in the last 24 hours)."), LogLevel.Detail);
-                    return;
-                }
-            }
-            catch { }
-            var q = L("Windows Defender 오프라인 검사로 PC 전체를 한 번 더 검사합니다. 이름이 알려진 다른 해킹 도구를 찾아 지웁니다.\n\n" +
-                      "이 검사는 Windows 가 꺼진 상태에서 해야 해서 재부팅이 필요합니다. 재부팅하면 검사 화면이 자동으로 뜨고, 약 15분 뒤 Windows 로 돌아옵니다.\n\n" +
-                      "저장하지 않은 작업이 있으면 먼저 저장하세요. 지금 재부팅해서 검사할까요?",
-                      "The Windows Defender offline scan checks the whole PC once more and removes other known hacking tools.\n\n" +
-                      "It runs while Windows is not running, so the PC must restart. The scan screen appears by itself, and Windows starts again after about 15 minutes.\n\n" +
-                      "Save any unsaved work first. Restart now for the scan?");
-            if (MessageBox.Show(this, q, L("Defender 오프라인 검사", "Defender offline scan"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-            {
-                Log(L("[-] 오프라인 검사를 하지 않았습니다. 나중에 하려면 다시 실행해 이 옵션으로 조치하세요.", "[-] Offline scan not started. To do it later, run the tool again with this option."), LogLevel.Detail);
-                return;
-            }
-            var lines = new List<string>();
-            Logger capture = (m, l) => { lines.Add(m); SafeLog(m, l); };
-            _cts = new CancellationTokenSource(); UpdateButtons();
-            try { await Task.Run(() => Remediator.RunElevated(new List<string> { "WDO" }, capture, out _)); }
-            finally { _cts.Dispose(); _cts = null; UpdateButtons(); }
-            if (lines.Any(l => l.Contains("[WDO] started")))
-            {
-                try { Directory.CreateDirectory(Path.GetDirectoryName(WdoMarker)); File.WriteAllText(WdoMarker, DateTime.Now.ToString("s")); } catch { }
-            }
-            SaveReport(report);
-        }
-
         private static string ReportName() => L("NikkeChecker_보고서_", "NikkeChecker_report_") + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".txt";
 
-        private static void SetStatus(Item i, string text, Color color) { i.Status.Text = text; i.Status.ForeColor = color; }
+        private void Ui(Action a)
+        {
+            if (IsDisposed) return;
+            try { BeginInvoke(a); } catch { }
+        }
 
-        // ------------------------------------------------------------------
         private void SafeLog(string msg, LogLevel level)
         {
             if (IsDisposed) return;
@@ -623,12 +824,12 @@ namespace NikkeChecker
             Color c;
             switch (level)
             {
-                case LogLevel.Header: c = Color.DeepSkyBlue; break;
-                case LogLevel.Ok: c = Color.FromArgb(140, 200, 140); break;
-                case LogLevel.Warn: c = Color.Gold; break;
-                case LogLevel.Bad: c = Color.FromArgb(255, 105, 97); break;
-                case LogLevel.Action: c = Color.Aquamarine; break;
-                case LogLevel.Detail: c = Color.Gray; break;
+                case LogLevel.Header: c = Color.FromArgb(125, 211, 252); break;
+                case LogLevel.Ok: c = Color.FromArgb(134, 239, 172); break;
+                case LogLevel.Warn: c = Color.FromArgb(253, 224, 71); break;
+                case LogLevel.Bad: c = Color.FromArgb(252, 165, 165); break;
+                case LogLevel.Action: c = Color.FromArgb(110, 231, 183); break;
+                case LogLevel.Detail: c = Color.FromArgb(161, 161, 170); break;
                 default: c = Color.Gainsboro; break;
             }
             _logBox.SelectionStart = _logBox.TextLength;
@@ -636,12 +837,14 @@ namespace NikkeChecker
             _logBox.SelectionColor = c;
             _logBox.AppendText(msg + Environment.NewLine);
             _logBox.ScrollToCaret();
+            // 점검 중 화면의 진행 글자: 최근 진행 기록 한 줄
+            if (_progressDetail != null && !_progressDetail.IsDisposed && Busy && msg.Trim().Length > 0 && (level == LogLevel.Detail || level == LogLevel.Header))
+                _progressDetail.Text = msg.Trim().Length > 110 ? msg.Trim().Substring(0, 110) + "…" : msg.Trim();
         }
 
         private string SaveReport(string path)
         {
             var text = _logBox.Text.Replace("\r\n", "\n").Replace("\n", "\r\n");
-            // 바탕화면에 못 쓰면 사용자 폴더에 저장
             foreach (var p in new[] { path, Path.Combine(Iocs.UserProfile, Path.GetFileName(path)) })
             {
                 try { File.WriteAllText(p, text, new UTF8Encoding(true)); return p; }
@@ -658,9 +861,7 @@ namespace NikkeChecker
                 FileName = ReportName(),
                 InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
             })
-            {
                 if (d.ShowDialog(this) == DialogResult.OK) SaveReport(d.FileName);
-            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -672,7 +873,7 @@ namespace NikkeChecker
         }
     }
 
-    /// <summary>「확인 필요」 자동 실행 프로그램 중 지울 것을 고르는 창. Defender 가 악성으로 확인한 것만 미리 체크된다.</summary>
+    /// <summary>「확인 필요」 항목 중 정리할 것을 고르는 창. Defender 가 악성으로 확인한 것만 미리 체크된다.</summary>
     internal sealed class ReviewDialog : Form
     {
         private readonly CheckedListBox _list = new CheckedListBox();
@@ -680,45 +881,47 @@ namespace NikkeChecker
 
         public List<AutostartItem> Selected => _list.CheckedIndices.Cast<int>().Select(i => _items[i]).ToList();
 
-        public ReviewDialog(List<AutostartItem> items, Font font)
+        public ReviewDialog(List<AutostartItem> items)
         {
             _items = items;
-            Text = L("확인이 필요한 자동 실행 프로그램", "Autostart programs to check");
-            Font = font;
-            ClientSize = new Size(900, 460);
+            Text = L("확인이 필요한 프로그램·설정", "Programs and settings to check");
+            Font = Theme.Font(9.5f);
+            BackColor = Theme.Card;
+            ClientSize = new Size(920, 480);
             MinimumSize = new Size(640, 360);
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = MaximizeBox = false;
 
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(10) };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(20), BackColor = Theme.Card };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
-            root.Controls.Add(new Label
-            {
-                AutoSize = true, MaximumSize = new Size(860, 0), Margin = new Padding(3, 0, 3, 8),
-                Text = L("9월 27일 이후 새로 생긴, 제작사 서명이 없는 자동 실행 프로그램입니다. 해커가 따로 깔았을 수 있습니다.\n" +
-                         "직접 설치한 게 아닌 것만 체크하세요. Defender 가 악성으로 확인한 것은 미리 체크되어 있습니다.\n" +
-                         "체크한 항목은 자동 실행 등록을 끊고 실행되던 파일도 지웁니다 (Windows 폴더 안 파일은 등록만 끊음).",
-                         "These autostart programs are new since Sep 27 and have no publisher signature. The hacker may have installed them.\n" +
-                         "Check only the ones you did NOT install. Items Defender confirmed as malware are checked already.\n" +
-                         "Checked items are unregistered and their files deleted (files inside the Windows folder are only unregistered)."),
-            });
+            var intro = Layouts.Stack(
+                Layouts.Text(L("직접 설치·설정한 게 아닌 것만 체크하세요", "Tick only what you did NOT install or set up yourself"), 11f, FontStyle.Bold),
+                Layouts.Text(L("9월 27일 이후 생겼고 제작사 서명이 없는 자동 실행 프로그램과, 해커가 쓸 수 있는 설정입니다. Windows 백신이 악성으로 확인한 것은 미리 체크되어 있습니다.\n" +
+                               "자동 실행: 등록을 끊고 파일을 지웁니다 (Windows·Program Files 안 파일은 등록만 끊음). 설정: 끄거나 Windows 기본값으로 되돌립니다. 브라우저: 끄기만 합니다.",
+                               "Autostart programs new since Sep 27 without a publisher signature, and settings a hacker could use. Items Windows Defender confirmed as malware are ticked already.\n" +
+                               "Autostarts: unregistered and their files deleted (files in Windows or Program Files are only unregistered). Settings: turned off or restored to the Windows default. Browsers: only closed."),
+                               9f, FontStyle.Regular, Theme.MutedForeground, new Padding(0, 0, 0, 10)));
+            intro.Dock = DockStyle.Fill;
+            root.Controls.Add(intro);
+            Shown += (s, e) => intro.FitWidth(root.ClientSize.Width - root.Padding.Horizontal);
 
-            _list.Dock = DockStyle.Fill; _list.CheckOnClick = true; _list.HorizontalScrollbar = true; _list.IntegralHeight = false;
+            _list.Dock = DockStyle.Fill; _list.CheckOnClick = true; _list.HorizontalScrollbar = true; _list.IntegralHeight = false; _list.BorderStyle = BorderStyle.FixedSingle;
             foreach (var it in items)
             {
-                var tag = it.Hidden ? L("위험 높음: 숨겨진 명령", "HIGH RISK: hidden command") : Defender.VerdictText(it.Defender);
-                _list.Items.Add($"[{it.Where}] {it.Name}  —  {it.Display}  ({L("생긴 날", "created")} {it.Date})  [{tag}]", it.Defender == "malware");
+                var tag = it.Hidden ? L("위험 높음: 숨겨진 명령", "HIGH RISK: hidden command") : it.File != null ? Defender.VerdictText(it.Defender) : "";
+                _list.Items.Add($"[{it.Where}] {it.Name}  —  {it.Display}" + (it.Date != "-" ? $"  ({L("생긴 날", "created")} {it.Date})" : "") + (tag.Length > 0 ? $"  [{tag}]" : ""), it.Defender == "malware");
             }
             root.Controls.Add(_list);
 
-            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
-            var cancel = new Button { Text = L("조치 취소", "Cancel clean-up"), AutoSize = true, MinimumSize = new Size(100, 30), DialogResult = DialogResult.Cancel };
-            var ok = new Button { Text = L("계속 (체크한 것만 삭제)", "Continue (delete checked only)"), AutoSize = true, MinimumSize = new Size(160, 30), DialogResult = DialogResult.OK };
-            buttons.Controls.AddRange(new Control[] { cancel, ok });
+            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, BackColor = Theme.Card, Padding = new Padding(0, 12, 0, 0) };
+            var cancel = new UiButton { Text = L("정리 취소", "Cancel clean-up"), Variant = ButtonVariant.Outline, AutoSize = true, DialogResult = DialogResult.Cancel, Margin = new Padding(8, 0, 0, 0) };
+            var ok = new UiButton { Text = L("계속 (체크한 것만 정리)", "Continue (fix ticked only)"), Variant = ButtonVariant.Default, AutoSize = true, DialogResult = DialogResult.OK, Margin = new Padding(8, 0, 0, 0) };
+            cancel.Size = cancel.GetPreferredSize(Size.Empty); ok.Size = ok.GetPreferredSize(Size.Empty);
+            buttons.Controls.AddRange(new Control[] { ok, cancel });
             root.Controls.Add(buttons);
             AcceptButton = ok; CancelButton = cancel;
         }

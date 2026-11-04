@@ -8,7 +8,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PlatformTarget>AnyCPU</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
-    <Version>1.4.0</Version>
+    <Version>1.5.0</Version>
     <Product>NIKKE PC Launcher Checker</Product>
     <Description>NIKKE PC launcher infection checker and cleaner</Description>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>

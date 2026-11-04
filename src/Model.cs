@@ -68,6 +68,8 @@ namespace NikkeChecker
         public HashSet<CheckId> Checks = new HashSet<CheckId>();
         public string InstallPath;
         public Func<List<AutostartItem>> AuditSystem;   // 관리자 권한으로 PC 전체 자동 실행을 읽는 함수 (null 이면 건너뜀)
+        public Action<CheckId, int, int> OnStepStart;    // 화면 진행 표시: (항목, 순번, 전체)
+        public Action<CheckId, StepSummary> OnStepDone;  // 화면 진행 표시: 항목 결과 요약 (점검 스레드에서 계산)
     }
 
     public sealed class ScanResult
@@ -106,6 +108,30 @@ namespace NikkeChecker
     }
 
     public delegate void Logger(string message, LogLevel level);
+
+    /// <summary>한 점검 항목의 결과 요약 (화면 표시용).</summary>
+    public struct StepSummary
+    {
+        public Severity? Worst;
+        public int Count;        // Worst 등급 항목 수
+        public bool AllPast;     // 감염 항목이 모두 과거 기록
+        public bool Unknown;     // 일부 확인 못 함
+        public bool NotBlocked;  // 차단 상태 항목: 차단 안 된 것이 있음
+
+        public static StepSummary Of(ScanResult r, CheckId id)
+        {
+            var f = r.Findings.Where(x => x.Check == id).ToList();
+            var worst = f.Count == 0 ? (Severity?)null : f.Max(x => x.Severity);
+            return new StepSummary
+            {
+                Worst = worst,
+                Count = worst == null ? 0 : f.Count(x => x.Severity == worst),
+                AllPast = worst == Severity.Critical && f.Where(x => x.Severity == Severity.Critical).All(x => x.Past),
+                Unknown = r.Unknown.ContainsKey(id),
+                NotBlocked = id == CheckId.Protection && f.SelectMany(x => x.Evidence).Any(e => e.EndsWith("차단 안 됨") || e.EndsWith("not blocked") || e.EndsWith("확인 불가") || e.EndsWith("unknown")),
+            };
+        }
+    }
 
     public static class Iocs
     {

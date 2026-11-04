@@ -46,6 +46,7 @@ namespace NikkeChecker
                 _ct.ThrowIfCancellationRequested();
                 var (id, title) = todo[i];
                 _log($"[{i + 1}/{todo.Count}] {title}", LogLevel.Header);
+                opt.OnStepStart?.Invoke(id, i + 1, todo.Count);
                 _r.Checked.Add(id);
                 int before = _r.Findings.Count;
                 switch (id)
@@ -63,6 +64,7 @@ namespace NikkeChecker
                 }
                 if (!_r.Findings.Skip(before).Any(f => f.Severity != Severity.Info) && !_r.Unknown.ContainsKey(id))
                     _log(L("  [-] 악성 흔적 없음", "  [-] No malicious traces"), LogLevel.Ok);
+                opt.OnStepDone?.Invoke(id, StepSummary.Of(_r, id));
             }
             DedupeFullScan();
             // 실행 중인 런처는 같은 점검에서 다른 감염 흔적이 있을 때만 감염. 없으면 깨끗하거나 새로 설치한 런처라 참고로만 (MotherSphere 0.5.0)

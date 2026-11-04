@@ -39,7 +39,13 @@ PC 전체 범위(HKLM, 작업 스케줄러, 서비스, WMI, Defender 설정)는 
 - *노출*: 노출 흔적만 있음
 - *흔적 없음* / *찾지 못함*
 
-## 조치 ([조치 실행], 확인 창 → 보고서를 바탕화면에 자동 저장 → 실행. 보고서를 저장하지 못하면 아무것도 지우지 않음)
+## 화면
+
+시작 → 점검 중 → 결과 → 정리 완료의 4단계 화면입니다. 시작 화면에서 [점검 시작]만 누르면 되고, 점검 항목 고르기와 설치 경로 지정은 「고급 설정」에 있습니다.
+결과 화면은 판정 배너와 발견한 것을 항목별 카드로 보여 주고, 정리 완료 화면에서는 해야 할 일(비밀번호 변경 등)을 체크리스트로 보여 줍니다.
+점검 기록은 「자세히 보기」에서 보고, 보고서는 그 기록을 그대로 저장합니다.
+
+## 정리 ([정리하기], 확인 창 → 보고서를 바탕화면에 자동 저장 → 실행. 보고서를 저장하지 못하면 아무것도 지우지 않음)
 
 1. 런처 종료
 2. HKCU CLSID 키 삭제 (먼저 끊어야 브라우저가 DLL 을 다시 로드하지 않음)
@@ -54,7 +60,7 @@ PC 전체 범위(HKLM, 작업 스케줄러, 서비스, WMI, Defender 설정)는 
 8. (관리자, UAC) Program Files 의 구버전 지속성 파일과 PC 전체 범위 항목 정리, hosts 에 7개 도메인 차단, 방화벽에서 `89.127.233.127`, `89.126.250.172` 아웃바운드 차단 (규칙 내용이 다르면 다시 만듦)
 9. (선택) Windows Defender 오프라인 검사: 재부팅 전에 한 번 더 묻고, Defender 가 주 백신이 아니거나 BitLocker 가 켜져 있거나 Windows 복구 환경이 꺼진 PC 에서는 대신 「전체 검사」 방법을 안내. 24시간 안에 이미 했으면 건너뜀
 
-**니케 완전 삭제 (선택, [니케 완전 삭제…] 버튼)** — 니케를 계속 할 사람은 쓰지 않습니다. 두 번 확인한 뒤 설치 폴더(게임·런처), 런처 데이터, 게임 데이터(`AppData\LocalLow`, 약 5GB), 내려받은 설치 파일(`nikkeminiloader*.exe`), 「설치된 앱」 등록·`nikkelauncher://`·게임 설정, 바로가기를 지웁니다. 계정과 진행 상황은 서버에 있어 지워지지 않습니다.
+**니케 완전 삭제 (선택, 결과·정리 완료 화면의 「니케 완전 삭제…」)** — 니케를 계속 할 사람은 쓰지 않습니다. 두 번 확인한 뒤 설치 폴더(게임·런처), 런처 데이터, 게임 데이터(`AppData\LocalLow`, 약 5GB), 내려받은 설치 파일(`nikkeminiloader*.exe`), 「설치된 앱」 등록·`nikkelauncher://`·게임 설정, 바로가기를 지웁니다. 계정과 진행 상황은 서버에 있어 지워지지 않습니다.
 - 지울 런처 폴더는 `nikke_launcher.exe` 가 있고 이름이 `Launcher` 이거나 `nikke` 가 들어간 폴더만 (상위가 `NIKKE` 이면 그 폴더)
 - 바탕 화면·문서·다운로드처럼 사용자 폴더 바로 아래 폴더, 드라이브 전체, Windows·Program Files·사용자 폴더 자체는 제외
 - 같은 회사(`com.proximabeta`)의 다른 게임 데이터·설정은 건드리지 않고 이름에 `nikke` 가 든 하위 폴더·키만
@@ -91,5 +97,5 @@ gh attestation verify NikkeChecker_EN.exe --repo nikke-checker/nikke-checker
 
 ## 참고 자료
 이 도구의 코드는 이 저장소에서 새로 작성했고, 다른 도구의 코드를 가져오지 않았습니다. 진단 규칙은 아래 공개 자료를 참고했습니다.
-- [MotherSphere/NIKKE-Launcher-Check](https://github.com/MotherSphere/NIKKE-Launcher-Check) (0.5.0 까지)와 [분석 글](https://gist.github.com/MotherSphere/d6c049a09ba8ac3085c51ee9df24a4e5) — 이 사고를 처음 분석한 자료. IoC, HSTS 키, 에이전트 빌드 ETag, 다운로드 완료 판정, LevelDB 압축 테이블, 런처 로그인 브라우저 프로필 규칙
+- [MotherSphere/NIKKE-Launcher-Check](https://github.com/MotherSphere/NIKKE-Launcher-Check) (0.5.1 까지)와 [분석 글](https://gist.github.com/MotherSphere/d6c049a09ba8ac3085c51ee9df24a4e5) — 이 사고를 처음 분석한 자료. IoC, HSTS 키, 에이전트 빌드 ETag, 다운로드 완료 판정, LevelDB 압축 테이블, 런처 로그인 브라우저 프로필 규칙
 - [햄찌](https://x.com/choi_hamzzi)의 NIKKE_k2f_cleaner (v3.1~v4.5) — 전체 드라이브 이름 검사, 자동 실행·추가 보안 점검 항목, Defender 개별·오프라인 검사, 과거 기록 판정, 니케 완전 삭제와 그 안전장치 등의 점검 아이디어를 참고

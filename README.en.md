@@ -36,6 +36,12 @@ Reading PC-wide entries (HKLM, Task Scheduler, services, WMI, Defender settings)
 - *EXPOSED*: only exposed traces
 - *No known traces* / *NIKKE not found*
 
+## Screens
+
+Four steps: start, checking, result, done. On the start screen you only press [Start check]; choosing checks and setting the install path are under Advanced.
+The result screen shows a verdict banner and one card per kind of finding; the done screen shows what to do next (passwords etc.) as a checklist.
+The log is under Show details, and the report saves that log as is.
+
 ## Clean-up ([Clean up]: confirm, save the report to the Desktop, then run. Nothing is deleted if the report cannot be saved)
 
 1. Close the launcher
@@ -51,7 +57,7 @@ Reading PC-wide entries (HKLM, Task Scheduler, services, WMI, Defender settings)
 8. (Admin, UAC) Older persistence files in Program Files and PC-wide items; block the 7 domains in hosts; block `89.127.233.127` and `89.126.250.172` outbound in the firewall (the rule is recreated if its contents differ)
 9. (Optional) Windows Defender offline scan: asks again before the restart. On PCs where Defender is not the active antivirus, BitLocker is on, or the Windows Recovery Environment is off, it explains how to run a Full scan instead. Skipped if done in the last 24 hours
 
-**Remove NIKKE completely (optional, [Remove NIKKE…] button)** - not for people who keep playing. After two confirmations it deletes the install folder (game + launcher), launcher data, game data (`AppData\LocalLow`, about 5 GB), downloaded installers (`nikkeminiloader*.exe`), the Installed apps entry, `nikkelauncher://` and game settings, and shortcuts. Your account and progress stay on the servers.
+**Remove NIKKE completely (optional, "Remove NIKKE…" on the result and done screens)** - not for people who keep playing. After two confirmations it deletes the install folder (game + launcher), launcher data, game data (`AppData\LocalLow`, about 5 GB), downloaded installers (`nikkeminiloader*.exe`), the Installed apps entry, `nikkelauncher://` and game settings, and shortcuts. Your account and progress stay on the servers.
 - Launcher folders are removed only if they contain `nikke_launcher.exe` and are named `Launcher` or contain `nikke` (the parent when it is named `NIKKE`)
 - Folders directly under your profile (Desktop, Documents, Downloads, ...), whole drives, and Windows / Program Files / profile folders themselves are excluded
 - Other games of the same publisher (`com.proximabeta`) are left alone; only subfolders and keys with `nikke` in the name
@@ -75,5 +81,5 @@ gh attestation verify NikkeChecker_EN.exe --repo nikke-checker/nikke-checker
 
 ## References
 The code in this repository was written from scratch; no code was taken from other tools. The detection rules draw on these public sources:
-- [MotherSphere/NIKKE-Launcher-Check](https://github.com/MotherSphere/NIKKE-Launcher-Check) (up to 0.5.0) and its [write-up](https://gist.github.com/MotherSphere/d6c049a09ba8ac3085c51ee9df24a4e5) - the first analysis of this incident: IoCs, HSTS keys, agent build ETags, the finished-download rule, compressed LevelDB tables, the launcher login browser profile
+- [MotherSphere/NIKKE-Launcher-Check](https://github.com/MotherSphere/NIKKE-Launcher-Check) (up to 0.5.1) and its [write-up](https://gist.github.com/MotherSphere/d6c049a09ba8ac3085c51ee9df24a4e5) - the first analysis of this incident: IoCs, HSTS keys, agent build ETags, the finished-download rule, compressed LevelDB tables, the launcher login browser profile
 - [hamzzi](https://x.com/choi_hamzzi)'s NIKKE_k2f_cleaner (v3.1-v4.5) - used as a reference for check ideas: drive-wide name scan, autostart and extra security checks, Defender per-file and offline scans, the past-record verdict, NIKKE removal and its safeguards
