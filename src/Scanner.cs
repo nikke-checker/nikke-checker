@@ -32,6 +32,8 @@ namespace NikkeChecker
             (CheckId.FullScan,     L("전체 드라이브 파일 이름 검사 (k2f*, insight.bundle, tinyget*, platform_experience_helper.dll)", "File-name scan of all drives (k2f*, insight.bundle, tinyget*, platform_experience_helper.dll)")),
             (CheckId.InstallLogs,  L("니케 설치 폴더 로그 / 저장된 에이전트 파일", "NIKKE install folder logs / saved agent files")),
             (CheckId.Autostart,    L("9월 27일 이후 새로 생긴, 제작사 서명 없는 자동 실행 프로그램", "New unsigned autostart programs since Sep 27")),
+            (CheckId.Extra,        L("추가 보안 점검 (해커 서버 연결·DNS 기록, 브라우저 원격 조종, Defender 제외, 원격 접속, 프록시, Winlogon·IFEO·AppInit)",
+                                     "Extra checks (hacker server connections, DNS, browser remote control, Defender exclusions, remote access, proxy, Winlogon/IFEO/AppInit)")),
             (CheckId.Protection,   L("차단 상태 (hosts / 방화벽)", "Block status (hosts / firewall)")),
         };
 
@@ -56,12 +58,20 @@ namespace NikkeChecker
                     case CheckId.FullScan: CheckFullScan(); break;
                     case CheckId.InstallLogs: CheckInstalls(opt.InstallPath); break;
                     case CheckId.Autostart: CheckAutostart(opt.AuditSystem); break;
+                    case CheckId.Extra: CheckExtra(opt.AuditSystem); break;
                     case CheckId.Protection: CheckProtection(); break;
                 }
                 if (!_r.Findings.Skip(before).Any(f => f.Severity != Severity.Info) && !_r.Unknown.ContainsKey(id))
                     _log(L("  [-] 악성 흔적 없음", "  [-] No malicious traces"), LogLevel.Ok);
             }
             DedupeFullScan();
+            // 실행 중인 런처는 같은 점검에서 다른 감염 흔적이 있을 때만 감염. 없으면 깨끗하거나 새로 설치한 런처라 참고로만 (MotherSphere 0.5.0)
+            if (!_r.Findings.Any(f => f.Severity == Severity.Critical && !f.LauncherRunning && !f.Past))
+                foreach (var f in _r.Findings.Where(f => f.LauncherRunning))
+                {
+                    f.Severity = Severity.Info; f.Fix = FixKind.None;
+                    f.Title = L($"런처가 실행 중 ({f.Target}.exe, PID {f.Pid}) — 다른 감염 흔적이 없어 참고로만 표시", $"The NIKKE launcher is running ({f.Target}.exe, PID {f.Pid}) - no other sign of the agent, shown for reference");
+                }
             if (_r.Unreadable.Count > 0)
                 _log(L($"  ※ 읽지 못해 검사가 불완전한 파일 {_r.Unreadable.Count}개 (보고서 끝에 목록)", $"  * Files that could not be fully checked: {_r.Unreadable.Count} (listed at the end of the report)"), LogLevel.Warn);
             return _r;
@@ -114,26 +124,33 @@ namespace NikkeChecker
                 }
             }
 
-            // 변종: 다른 CLSID 라도 64자리 폴더의 platform_experience_helper.dll 을 가리키면 악성
-            using (var root = OpenHkcu(Iocs.ClsidRoot))
+            // 변종: 같은 수법에 다른 CLSID 이름을 쓴 경우 (whykusanagi 분석, 햄찌 v4.2).
+            // InprocServer32 가 브라우저 User Data 나 PlatformExperienceHelper 를 가리키면 같은 등록으로 본다
+            foreach (var clsidRoot in new[] { Iocs.ClsidRoot, @"Software\Classes\WOW6432Node\CLSID" })
             {
-                if (root == null) return;
-                foreach (var name in root.GetSubKeyNames())
+                using (var root = OpenHkcu(clsidRoot))
                 {
-                    if (name.Equals(Iocs.BadClsid, StringComparison.OrdinalIgnoreCase)) continue;
-                    foreach (var server in new[] { "InprocServer32", "LocalServer32" })
+                    if (root == null) continue;
+                    foreach (var name in root.GetSubKeyNames())
                     {
+                        if (name.Equals(Iocs.BadClsid, StringComparison.OrdinalIgnoreCase)) continue;
                         string val;
-                        try { using (var s = root.OpenSubKey(name + "\\" + server)) val = s?.GetValue("") as string; }
+                        try { using (var sk = root.OpenSubKey(name + "\\InprocServer32")) val = sk?.GetValue("") as string; }
                         catch { continue; }
-                        if (val == null || val.IndexOf(Iocs.DllName, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                        var key = Iocs.ClsidRoot + "\\" + name;
-                        if (Iocs.HexDllPath.IsMatch(Environment.ExpandEnvironmentVariables(val)))
-                            Add(CheckId.Clsid, Severity.Critical, L($"변종 CLSID 하이재킹: HKCU\\{key}", $"Variant CLSID hijack: HKCU\\{key}"),
-                                new[] { server + " = " + val }, FixKind.DeleteRegistryKey, key);
-                        else
-                            Add(CheckId.Clsid, Severity.Info, L($"확인 필요 (자동 삭제 안 함): HKCU\\{key}", $"Check manually (not deleted automatically): HKCU\\{key}"), new[] { server + " = " + val });
-                        break;
+                        if (string.IsNullOrEmpty(val)) continue;
+                        var expanded = Environment.ExpandEnvironmentVariables(val.Trim().Trim('"'));
+                        var key = clsidRoot + "\\" + name;
+                        if (Regex.IsMatch(expanded, @"\\PlatformExperienceHelper\\|\\User Data\\", RegexOptions.IgnoreCase))
+                        {
+                            Add(CheckId.Clsid, Severity.Critical, L($"변종 CLSID 하이재킹 (다른 이름): HKCU\\{key}", $"Variant CLSID hijack (other name): HKCU\\{key}"),
+                                new[] { "InprocServer32 = " + val }, FixKind.DeleteRegistryKey, key);
+                            var leaf = Path.GetFileName(expanded);
+                            if ((leaf.Equals(Iocs.DllName, StringComparison.OrdinalIgnoreCase) || leaf.Equals(Iocs.DllName + ".old", StringComparison.OrdinalIgnoreCase)) && File.Exists(expanded))
+                                Add(CheckId.Clsid, Severity.Critical, L($"레지스트리가 가리키는 지속성 DLL: {expanded}", $"Persistence DLL named by the registry: {expanded}"), null,
+                                    FileUtil.IsUnderUserProfile(expanded) ? FixKind.DeleteFile : FixKind.None, expanded, browser: "chrome");
+                        }
+                        else if (expanded.IndexOf(Iocs.DllName, StringComparison.OrdinalIgnoreCase) >= 0)
+                            Add(CheckId.Clsid, Severity.Info, L($"확인 필요 (자동 삭제 안 함): HKCU\\{key}", $"Check manually (not deleted automatically): HKCU\\{key}"), new[] { "InprocServer32 = " + val });
                     }
                 }
             }
@@ -176,12 +193,7 @@ namespace NikkeChecker
             }
 
             // 구버전 지속성: Chrome Application\PlatformExperienceHelper 의 DLL / .dll.old / old-clsid.txt
-            var bases = new[]
-            {
-                Environment.GetEnvironmentVariable("ProgramW6432"),
-                Environment.GetEnvironmentVariable("ProgramFiles"),
-                Environment.GetEnvironmentVariable("ProgramFiles(x86)"),
-            }.Where(p => !string.IsNullOrEmpty(p)).Select(p => (Path.Combine(p, Iocs.OldPersistenceDir), true))
+            var bases = Paths.ProgramFilesDirs.Select(p => (Path.Combine(p, Iocs.OldPersistenceDir), true))
              .Concat(new[] { (Path.Combine(Iocs.LocalAppData, Iocs.OldPersistenceDir), false) })
              .GroupBy(x => x.Item1, StringComparer.OrdinalIgnoreCase).Select(g => g.First());
 
@@ -207,7 +219,7 @@ namespace NikkeChecker
                 {
                     using (p)
                         Add(CheckId.Processes, Severity.Critical, L($"런처가 실행 중: {p.ProcessName}.exe (PID {p.Id}) — 즉시 종료해야 합니다", $"The launcher is running: {p.ProcessName}.exe (PID {p.Id}) - close it now"),
-                            null, FixKind.KillProcess, p.ProcessName, p.Id);
+                            null, FixKind.KillProcess, p.ProcessName, p.Id).LauncherRunning = true;
                 }
             }
 
@@ -247,72 +259,84 @@ namespace NikkeChecker
             {
                 if (!Directory.Exists(dir)) continue;
                 _r.LauncherDataDirs.Add(dir);
-                _log(L($"  {dir} 확인 중", $"  Checking {dir}"), LogLevel.Detail);
-                int count = 0, before = _r.Findings.Count;
-                var agent = new List<string>();
-                var cacheHits = new List<string>();
-                var otherHits = new List<string>();
-
-                foreach (var f in FileUtil.Files(dir, 12))
-                {
-                    _ct.ThrowIfCancellationRequested();
-                    var data = FileUtil.Read(f, MaxFileBytes);
-                    if (data == null) { _r.Unreadable.Add(f); continue; }
-                    count++;
-                    var name = Path.GetFileName(f);
-                    var rel = f.Substring(dir.Length).TrimStart('\\');
-
-                    if (FileUtil.Contains(data, "k2f_chan") || FileUtil.Contains(data, "k2f.agent"))
-                        agent.Add(rel);
-
-                    if (name == "TransportSecurity") { CheckHsts(dir, f, data); continue; }
-                    if (name == "Network Persistent State")
-                    {
-                        if (FileUtil.Contains(data, "analytics.insightjs.com"))
-                            Add(CheckId.LauncherData, Severity.Critical, L("런처가 에이전트 배포 서버(analytics.insightjs.com)에 접속한 기록", "The launcher contacted the agent server (analytics.insightjs.com)"),
-                                new[] { rel }, FixKind.DeleteTbsCache, TbsCacheOf(dir, f));
-                        else if (FileUtil.Contains(data, "insightjs"))
-                            Add(CheckId.LauncherData, Severity.Warning, L("런처가 insightjs.com 에 접속한 기록", "The launcher connected to insightjs.com"), new[] { rel },
-                                FixKind.DeleteTbsCache, TbsCacheOf(dir, f));
-                        continue;
-                    }
-                    if (name == "Reporting and NEL")
-                    {
-                        if (FileUtil.Contains(data, "insightjs"))
-                            Add(CheckId.LauncherData, Severity.Warning, L("런처가 insightjs.com 에 접속한 기록", "The launcher connected to insightjs.com"), new[] { rel },
-                                FixKind.DeleteTbsCache, TbsCacheOf(dir, f));
-                        continue;
-                    }
-                    if (!FileUtil.Contains(data, "insightjs")) continue;
-                    var parts = rel.Split('\\');
-                    if (parts.Any(p => p.Equals("Cache", StringComparison.OrdinalIgnoreCase) || p.Equals("Code Cache", StringComparison.OrdinalIgnoreCase)))
-                        cacheHits.Add($"{rel} ({L("생성", "created")} {FileUtil.Created(f):yyyy-MM-dd HH:mm:ss})");
-                    else otherHits.Add(rel);
-                }
-
-                var tbs = Path.Combine(dir, "tbs_cache");
-                if (agent.Count > 0)
-                    Add(CheckId.LauncherData, Severity.Critical, L("에이전트 실행 흔적 (k2f.agent.state / k2f_chan) — 런처 Local Storage", "Agent traces (k2f.agent.state / k2f_chan) in the launcher Local Storage"),
-                        agent.Take(MaxEvidence), FixKind.DeleteTbsCache, tbs);
-                if (cacheHits.Count > 0)
-                    Add(CheckId.LauncherData, Severity.Warning, L($"런처가 악성 스크립트(insightjs)를 불러온 캐시 {cacheHits.Count}개", $"The launcher loaded the malicious script (insightjs): {cacheHits.Count} cache files"),
-                        cacheHits.Take(MaxEvidence), FixKind.DeleteTbsCache, tbs);
-                if (otherHits.Count > 0)
-                    Add(CheckId.LauncherData, Severity.Warning, L($"insightjs 를 언급하는 파일 {otherHits.Count}개", $"Files that mention insightjs: {otherHits.Count}"),
-                        otherHits.Take(MaxEvidence), FixKind.DeleteTbsCache, tbs);
-                if (_r.Findings.Count == before)
-                    _log(L($"  [-] {Path.GetFileName(dir)}: 파일 {count}개 확인, 흔적 없음", $"  [-] {Path.GetFileName(dir)}: {count} files checked, no traces"), LogLevel.Detail);
+                ScanDataDir(dir, Path.Combine(dir, "tbs_cache"), false);
             }
             if (_r.LauncherDataDirs.Count == 0) _log(L("  [-] 런처 데이터 폴더 없음", "  [-] No launcher data folder"), LogLevel.Detail);
+
+            // 런처 로그인 화면의 브라우저 프로필 (MotherSphere 0.5.0). 다른 CEF 프로그램도 쓰는 폴더라 흔적이 있을 때만 보고하고,
+            // 런처 데이터로 세지 않는다. 지우면 런처가 새로 만들고 런처 로그인만 다시 하면 된다.
+            var cef = Iocs.CefUserData;
+            if (Directory.Exists(cef) && ScanDataDir(cef, cef, true)) _r.CefDirs.Add(cef);
         }
 
-        private static string TbsCacheOf(string dataDir, string file)
+        /// <summary>런처 데이터(또는 CEF 프로필) 폴더 하나 검사. 흔적이 있으면 true.</summary>
+        private bool ScanDataDir(string dir, string target, bool cef)
         {
-            // 조치는 tbs_cache 단위로 한다 (흔적 대부분이 그 아래에 있음)
-            return Path.Combine(dataDir, "tbs_cache");
+            _log(L($"  {dir} 확인 중", $"  Checking {dir}"), LogLevel.Detail);
+            int count = 0, before = _r.Findings.Count;
+            var agent = new List<string>();
+            var cacheHits = new List<string>();
+            var otherHits = new List<string>();
+            string where = cef ? L(" — 런처 로그인 브라우저 프로필(CEF)", " - launcher login browser profile (CEF)") : "";
+
+            foreach (var f in FileUtil.Files(dir, 12))
+            {
+                _ct.ThrowIfCancellationRequested();
+                var data = FileUtil.Read(f, MaxFileBytes);
+                if (data == null) { _r.Unreadable.Add(f); continue; }
+                count++;
+                var name = Path.GetFileName(f);
+                var rel = f.Substring(dir.Length).TrimStart('\\');
+
+                // .ldb 테이블은 Snappy 압축·키 앞부분 공유 때문에 그냥 검색하면 놓칠 수 있어 풀어서도 본다 (MotherSphere 0.4.1)
+                var expanded = name.EndsWith(".ldb", StringComparison.OrdinalIgnoreCase) ? LevelDb.ExpandTable(data) : null;
+                if (FileUtil.Contains(data, "k2f_chan") || FileUtil.Contains(data, "k2f.agent") ||
+                    (expanded != null && (FileUtil.Contains(expanded, "k2f_chan") || FileUtil.Contains(expanded, "k2f.agent"))))
+                    agent.Add(rel);
+
+                if (name == "TransportSecurity") { CheckHsts(dir, f, data, target, where); continue; }
+                if (name == "Network Persistent State")
+                {
+                    if (FileUtil.Contains(data, "analytics.insightjs.com"))
+                        Add(CheckId.LauncherData, Severity.Critical, L("런처가 에이전트 배포 서버(analytics.insightjs.com)에 접속한 기록", "The launcher contacted the agent server (analytics.insightjs.com)") + where,
+                            new[] { rel }, FixKind.DeleteTbsCache, target);
+                    else if (FileUtil.Contains(data, "insightjs"))
+                        Add(CheckId.LauncherData, Severity.Warning, L("런처가 insightjs.com 에 접속한 기록", "The launcher connected to insightjs.com") + where, new[] { rel },
+                            FixKind.DeleteTbsCache, target);
+                    continue;
+                }
+                if (name == "Reporting and NEL")
+                {
+                    if (FileUtil.Contains(data, "insightjs"))
+                        Add(CheckId.LauncherData, Severity.Warning, L("런처가 insightjs.com 에 접속한 기록", "The launcher connected to insightjs.com") + where, new[] { rel },
+                            FixKind.DeleteTbsCache, target);
+                    continue;
+                }
+                if (!FileUtil.Contains(data, "insightjs") && !(expanded != null && FileUtil.Contains(expanded, "insightjs"))) continue;
+                var parts = rel.Split('\\');
+                if (parts.Any(p => p.Equals("Cache", StringComparison.OrdinalIgnoreCase) || p.Equals("Code Cache", StringComparison.OrdinalIgnoreCase)))
+                    cacheHits.Add($"{rel} ({L("생성", "created")} {FileUtil.Created(f):yyyy-MM-dd HH:mm:ss})");
+                else otherHits.Add(rel);
+            }
+
+            if (agent.Count > 0)
+                Add(CheckId.LauncherData, Severity.Critical, L("에이전트 실행 흔적 (k2f.agent.state / k2f_chan) — Local Storage", "Agent traces (k2f.agent.state / k2f_chan) in Local Storage") + where,
+                    agent.Take(MaxEvidence), FixKind.DeleteTbsCache, target);
+            if (cacheHits.Count > 0)
+                Add(CheckId.LauncherData, Severity.Warning, L($"런처가 악성 스크립트(insightjs)를 불러온 캐시 {cacheHits.Count}개", $"The launcher loaded the malicious script (insightjs): {cacheHits.Count} cache files") + where,
+                    cacheHits.Take(MaxEvidence), FixKind.DeleteTbsCache, target);
+            if (otherHits.Count > 0)
+                Add(CheckId.LauncherData, Severity.Warning, L($"insightjs 를 언급하는 파일 {otherHits.Count}개", $"Files that mention insightjs: {otherHits.Count}") + where,
+                    otherHits.Take(MaxEvidence), FixKind.DeleteTbsCache, target);
+            bool found = _r.Findings.Count > before;
+            if (found && cef)
+                _log(L("        이 폴더를 지우면 런처가 새로 만들고, 런처 로그인만 다시 하면 됩니다.", "        If deleted, the launcher creates a new one; you only sign in to the launcher again."), LogLevel.Detail);
+            if (!found && !cef)
+                _log(L($"  [-] {Path.GetFileName(dir)}: 파일 {count}개 확인, 흔적 없음", $"  [-] {Path.GetFileName(dir)}: {count} files checked, no traces"), LogLevel.Detail);
+            return found;
         }
 
-        private void CheckHsts(string dir, string file, byte[] data)
+        private void CheckHsts(string dir, string file, byte[] data, string target, string where)
         {
             var text = Encoding.UTF8.GetString(data);
             var rel = file.Substring(dir.Length).TrimStart('\\');
@@ -333,11 +357,10 @@ namespace NikkeChecker
             if (seen.Count == 0) return;
             var ev = seen.Select(s => L($"{s.Domain} HSTS 기록 (마지막 수신 {(s.Observed.HasValue ? s.Observed.Value.ToString("yyyy-MM-dd HH:mm:ss") : "알 수 없음")})", $"{s.Domain} HSTS entry (last received {(s.Observed.HasValue ? s.Observed.Value.ToString("yyyy-MM-dd HH:mm:ss") : "unknown")})")).ToList();
             ev.Insert(0, rel);
-            var target = TbsCacheOf(dir, file);
             if (seen.Any(s => s.Domain == "analytics.insightjs.com"))
-                Add(CheckId.LauncherData, Severity.Critical, L("런처가 에이전트 배포 서버(analytics.insightjs.com)에 접속한 기록 (HSTS)", "The launcher contacted the agent server (analytics.insightjs.com) (HSTS)"), ev, FixKind.DeleteTbsCache, target);
+                Add(CheckId.LauncherData, Severity.Critical, L("런처가 에이전트 배포 서버(analytics.insightjs.com)에 접속한 기록 (HSTS)", "The launcher contacted the agent server (analytics.insightjs.com) (HSTS)") + where, ev, FixKind.DeleteTbsCache, target);
             else
-                Add(CheckId.LauncherData, Severity.Warning, L("런처가 insightjs 도메인에 접속한 기록 (HSTS)", "The launcher connected to an insightjs domain (HSTS)"), ev, FixKind.DeleteTbsCache, target);
+                Add(CheckId.LauncherData, Severity.Warning, L("런처가 insightjs 도메인에 접속한 기록 (HSTS)", "The launcher connected to an insightjs domain (HSTS)") + where, ev, FixKind.DeleteTbsCache, target);
         }
 
         // ------------------------------------------------------------------
@@ -356,6 +379,7 @@ namespace NikkeChecker
                     if (Iocs.IsK2fName(name))
                     {
                         string kind = name.StartsWith("k2f-bcreds", StringComparison.OrdinalIgnoreCase) ? L("수집된 브라우저 자격 증명", "collected browser credentials")
+                                    : name.StartsWith("k2f-keyscan", StringComparison.OrdinalIgnoreCase) ? L("수집한 키·인증 파일", "collected keys and credential files")
                                     : name.StartsWith("k2f_screen", StringComparison.OrdinalIgnoreCase) ? L("화면 캡처", "screenshot") : L("에이전트 임시 파일", "agent temp file");
                         Add(CheckId.Temp, Severity.Critical, L($"에이전트 임시 파일 ({kind}): {f}", $"Agent temp file ({kind}): {f}"),
                             new[] { $"{FileUtil.Size(f):N0} bytes, {L("생성", "created")} {FileUtil.Created(f):yyyy-MM-dd HH:mm:ss}" }, FixKind.DeleteFile, f);
@@ -426,10 +450,30 @@ namespace NikkeChecker
                 else if (line.IndexOf("insightjs", StringComparison.OrdinalIgnoreCase) >= 0) loader = true;
                 if (RunLine.IsMatch(line)) runs.Add($"[{L("행", "line")} {no}] {FileUtil.Trunc(line)}");
             }
-            if (k2f) Add(CheckId.InstallLogs, Severity.Critical, L($"debug.log: 에이전트가 실행됨 (k2f_chan / adopted / agent started as) — 실행 기록 {runs.Count}줄", $"debug.log: the agent ran (k2f_chan / adopted / agent started as) - {runs.Count} run lines"), runs.Take(50));
-            if (server) Add(CheckId.InstallLogs, Severity.Critical, L("debug.log: 런처가 에이전트 배포 서버에 요청함 (analytics.insightjs.com / insight.bundle)", "debug.log: the launcher requested the agent server (analytics.insightjs.com / insight.bundle)"));
-            if (loader && !server && !k2f) Add(CheckId.InstallLogs, Severity.Warning, L("debug.log: 악성 로더(insightjs)만 실행됨", "debug.log: only the malicious loader (insightjs) ran"));
+            // debug.log 는 런처가 실행할 때마다 덧붙이는 기록이라, 지금 남은 해킹 파일이 아니라 「과거 기록」이다 (햄찌 v4.2)
+            if (k2f) Add(CheckId.InstallLogs, Severity.Critical, L($"debug.log: 에이전트가 실행됨 (k2f_chan / adopted / agent started as) — 실행 기록 {runs.Count}줄", $"debug.log: the agent ran (k2f_chan / adopted / agent started as) - {runs.Count} run lines") + PastTag, runs.Take(50)).Past = true;
+            if (server) Add(CheckId.InstallLogs, Severity.Critical, L("debug.log: 런처가 에이전트 배포 서버에 요청함 (analytics.insightjs.com / insight.bundle)", "debug.log: the launcher requested the agent server (analytics.insightjs.com / insight.bundle)") + PastTag).Past = true;
+            if (loader && !server && !k2f) Add(CheckId.InstallLogs, Severity.Warning, L("debug.log: 악성 로더(insightjs)만 실행됨", "debug.log: only the malicious loader (insightjs) ran") + PastTag).Past = true;
             if (runs.Count > 50) _log(L($"        … 외 {runs.Count - 50}줄", $"        … {runs.Count - 50} more lines"), LogLevel.Detail);
+        }
+
+        private static string PastTag => L(" (과거 기록)", " (past record)");
+
+        /// <summary>
+        /// insight.bundle 다운로드가 실제로 끝났는지 (MotherSphere 0.4.1): OnDownloadResult 의 result=0 이고 total 이 0 보다 크거나,
+        /// curl perform success 줄. 서버가 응답하지 않은 요청(curl_error=7, result=2, total=0)은 시도일 뿐이다.
+        /// </summary>
+        public static bool BundleDownloaded(string text)
+        {
+            foreach (var l in text.Split('\n'))
+            {
+                if (l.IndexOf("insight.bundle", StringComparison.Ordinal) < 0) continue;
+                if (l.Contains("curl perform success")) return true;
+                if (!l.Contains("OnDownloadResult")) continue;
+                var r = Regex.Match(l, @"result=([^,\s;\t]+)"); var t = Regex.Match(l, @"total=([^,\s;\t]+)");
+                if (r.Success && r.Groups[1].Value == "0" && t.Success && t.Groups[1].Value != "0") return true;
+            }
+            return false;
         }
 
         private static readonly Regex Etag = new Regex("ETag:\\s*\"([0-9a-fA-F]+)-([0-9a-fA-F]+)\"", RegexOptions.IgnoreCase);
@@ -437,6 +481,7 @@ namespace NikkeChecker
         private void CheckLauncherLogs(string logDir)
         {
             var downloads = new List<string>();
+            var attempts = new List<string>();
             var builds = new List<string>();
             foreach (var f in FileUtil.Files(logDir, 8))
             {
@@ -448,14 +493,15 @@ namespace NikkeChecker
                 if (FileUtil.IsLuaJit(data) || Iocs.IsK2fName(Path.GetFileName(f)))
                 {
                     Add(CheckId.InstallLogs, Severity.Critical, L($"내려받은 에이전트 파일 ({(FileUtil.IsLuaJit(data) ? "LuaJIT 바이트코드" : "k2f 파일")}): {f}", $"Downloaded agent file ({(FileUtil.IsLuaJit(data) ? "LuaJIT bytecode" : "k2f file")}): {f}"),
-                        new[] { $"{data.Length:N0} bytes" + (data.Length == Iocs.KnownAgentSize ? L(" (알려진 에이전트와 같은 크기)", " (same size as the known agent)") : "") + $", {L("생성", "created")} {FileUtil.Created(f):yyyy-MM-dd HH:mm:ss}" },
+                        new[] { $"{data.Length:N0} bytes" + (Iocs.KnownAgentSizes.Contains(data.Length) ? L(" (알려진 에이전트와 같은 크기)", " (same size as a known agent build)") : "") + $", {L("생성", "created")} {FileUtil.Created(f):yyyy-MM-dd HH:mm:ss}" },
                         FixKind.DeleteFile, f);
                     continue;
                 }
                 if (FileUtil.Contains(data, "insight.bundle"))
                 {
                     var line = FileUtil.LinesWith(data, "insight.bundle").FirstOrDefault();
-                    downloads.Add($"{rel}: {FileUtil.Trunc(line ?? "")}");
+                    if (BundleDownloaded(Encoding.UTF8.GetString(data))) downloads.Add($"{rel}: {FileUtil.Trunc(line ?? "")}");
+                    else attempts.Add($"{rel}: {FileUtil.Trunc(line ?? "")}");
                     if (Path.GetFileName(f).Equals("tinyget.mem.log", StringComparison.OrdinalIgnoreCase))
                     {
                         foreach (Match m in Etag.Matches(Encoding.UTF8.GetString(data)))
@@ -470,12 +516,14 @@ namespace NikkeChecker
                     }
                 }
                 else if (FileUtil.Contains(data, "analytics.insightjs.com"))
-                    Add(CheckId.InstallLogs, Severity.Critical, L($"런처 로그: 에이전트 배포 서버 접속 기록 ({rel})", $"Launcher log: contact with the agent server ({rel})"));
+                    Add(CheckId.InstallLogs, Severity.Critical, L($"런처 로그: 에이전트 배포 서버 접속 기록 ({rel})", $"Launcher log: contact with the agent server ({rel})") + PastTag).Past = true;
                 else if (FileUtil.Contains(data, "insightjs"))
-                    Add(CheckId.InstallLogs, Severity.Warning, L($"런처 로그: insightjs 기록 ({rel})", $"Launcher log: insightjs record ({rel})"));
+                    Add(CheckId.InstallLogs, Severity.Warning, L($"런처 로그: insightjs 기록 ({rel})", $"Launcher log: insightjs record ({rel})") + PastTag).Past = true;
             }
             if (downloads.Count > 0)
-                Add(CheckId.InstallLogs, Severity.Critical, L($"에이전트(insight.bundle) 다운로드 기록 {downloads.Count}건", $"Agent (insight.bundle) download records: {downloads.Count}"), downloads.Take(20));
+                Add(CheckId.InstallLogs, Severity.Critical, L($"에이전트(insight.bundle) 다운로드 기록 {downloads.Count}건", $"Agent (insight.bundle) download records: {downloads.Count}") + PastTag, downloads.Take(20)).Past = true;
+            if (attempts.Count > 0)
+                Add(CheckId.InstallLogs, Severity.Warning, L($"에이전트(insight.bundle)를 요청했지만 받지 못한 기록 {attempts.Count}건 (서버 무응답 등)", $"Agent (insight.bundle) requested but not received: {attempts.Count} (e.g. the server did not answer)") + PastTag, attempts.Take(20)).Past = true;
             if (builds.Count > 0)
                 Add(CheckId.InstallLogs, Severity.Info, L("내려받은 에이전트 빌드 (tinyget.mem.log)", "Downloaded agent build (tinyget.mem.log)"), builds);
         }
@@ -541,7 +589,7 @@ namespace NikkeChecker
                     if (FileUtil.IsLuaJit(head))
                         Add(CheckId.FullScan, Severity.Critical, L($"에이전트 파일 (LuaJIT 바이트코드, 다른 위치): {h}", $"Agent file (LuaJIT bytecode, other location): {h}"), null, FixKind.DeleteFile, h);
                 }
-                else if (Regex.IsMatch(leaf, @"^k2f(-bcreds|_screen|\.agent)"))
+                else if (Regex.IsMatch(leaf, @"^k2f(-bcreds|-keyscan|_screen|\.agent)"))
                     // 임시 폴더 안의 것은 5번 항목이 삭제한다. 그 밖(연구용 샘플 폴더 등)은 보고만 하고 지우지 않는다.
                     Add(CheckId.FullScan, Severity.Critical, L($"에이전트 관련 파일 (임시 폴더 밖, 자동 삭제 안 함 — 직접 확인): {h}", $"Agent-related file (outside the temp folder, not deleted automatically - check it yourself): {h}"), null, FixKind.None, h);
             }
@@ -561,28 +609,40 @@ namespace NikkeChecker
         // ------------------------------------------------------------------
         // 자동 실행 프로그램 (해커가 따로 깔았을 수 있는 것). 판정에 영향 없음, 사용자가 고른 것만 삭제
         // ------------------------------------------------------------------
+        private List<AutostartItem> _sysItems;
+        private bool _sysTried;
+
+        /// <summary>PC 전체 범위 「확인 필요」 항목 (자동 실행 + 추가 점검). 관리자 권한이 필요해 한 번만 읽어 둔다. 못 읽으면 null.</summary>
+        private List<AutostartItem> SystemItems(Func<List<AutostartItem>> auditSystem)
+        {
+            if (_sysTried) return _sysItems;
+            _sysTried = true;
+            if (Remediator.IsAdmin())
+            {
+                _sysItems = Autostart.AuditSystem(_ct, n => _log("  " + n, LogLevel.Detail));
+                _sysItems.AddRange(Extra.AuditSystem(_ct, n => _log("  " + n, LogLevel.Detail)));
+                Autostart.ScanWithDefender(_sysItems, _ct);
+            }
+            else
+            {
+                _log(L("  PC 전체 범위(서비스·작업 스케줄러·HKLM·Defender 설정 등)를 읽으려면 관리자 권한이 필요합니다 (UAC 창, 읽기만 함)",
+                       "  Reading PC-wide entries (services, scheduled tasks, HKLM, Defender settings, etc.) needs administrator rights (UAC prompt, read-only)"), LogLevel.Detail);
+                _sysItems = auditSystem?.Invoke();
+            }
+            return _sysItems;
+        }
+
         private void CheckAutostart(Func<List<AutostartItem>> auditSystem)
         {
             var items = Autostart.AuditUser(_ct);
             Autostart.ScanWithDefender(items, _ct);
-            if (Remediator.IsAdmin())
+            var sys = SystemItems(auditSystem);
+            if (sys == null)
             {
-                var sys = Autostart.AuditSystem(_ct, n => _log("  " + n, LogLevel.Detail));
-                Autostart.ScanWithDefender(sys, _ct);
-                items.AddRange(sys);
+                _log(L("  [?] 관리자 권한을 받지 못해 현재 사용자 범위만 확인했습니다.", "  [?] No administrator rights: only the current user's entries were checked."), LogLevel.Warn);
+                _r.Unknown[CheckId.Autostart] = true;
             }
-            else
-            {
-                _log(L("  PC 전체의 자동 실행(서비스·작업 스케줄러 등)을 읽으려면 관리자 권한이 필요합니다 (UAC 창, 읽기만 함)",
-                       "  Reading PC-wide autostarts (services, scheduled tasks, etc.) needs administrator rights (UAC prompt, read-only)"), LogLevel.Detail);
-                var sys = auditSystem?.Invoke();
-                if (sys == null)
-                {
-                    _log(L("  [?] 관리자 권한을 받지 못해 현재 사용자의 자동 실행만 확인했습니다.", "  [?] No administrator rights: only the current user's autostarts were checked."), LogLevel.Warn);
-                    _r.Unknown[CheckId.Autostart] = true;
-                }
-                else items.AddRange(sys);
-            }
+            else items.AddRange(sys.Where(a => a.Group == "autostart"));
             foreach (var it in items)
             {
                 var ev = new List<string> { $"{it.Display}  ({L("생긴 날", "created")} {it.Date})" };
@@ -593,6 +653,40 @@ namespace NikkeChecker
             }
             if (items.Count > 0)
                 _log(L("  ※ 직접 설치한 프로그램이면 괜찮습니다. [조치 실행] 에서 하나씩 골라 지울 수 있습니다.", "  * Programs you installed yourself are fine. You can pick which ones to delete in [Clean up]."), LogLevel.Info);
+        }
+
+        // ------------------------------------------------------------------
+        // 추가 보안 점검 (햄찌 v4.1). 확실한 흔적(해커 서버 연결·DNS 기록)은 바로 정리 대상, 나머지는 「확인 필요」
+        // ------------------------------------------------------------------
+        private void CheckExtra(Func<List<AutostartItem>> auditSystem)
+        {
+            foreach (var c in Extra.C2Connections())
+            {
+                bool windowsProgram = c.Path != null && Paths.IsInside(c.Path, Paths.Windows);
+                Add(CheckId.Extra, Severity.Critical, L($"지금 해커 서버와 연결 중인 프로그램: {c.Name} (PID {c.Pid}) -> {c.Remote}", $"Program connected to the hacker server right now: {c.Name} (PID {c.Pid}) -> {c.Remote}"),
+                    new[] { c.Path ?? "", windowsProgram ? L("Windows 기본 프로그램이라 끄지 않습니다 — 방화벽 차단과 PC 재시작으로 끊깁니다", "A Windows program, so it is not closed - the firewall block and a restart cut it off") : "" }.Where(x => x.Length > 0),
+                    windowsProgram ? FixKind.None : FixKind.KillProcess, c.Name, c.Pid);
+            }
+            var dns = Extra.DnsHits();
+            if (dns.Count > 0)
+                Add(CheckId.Extra, Severity.Warning, L($"최근 해커 주소를 찾아본 기록 (DNS 캐시) {dns.Count}건", $"Recent lookups of hacker addresses (DNS cache): {dns.Count}"), dns, FixKind.FlushDns, "dns");
+
+            var items = Extra.AuditUser(_ct);
+            Autostart.ScanWithDefender(items, _ct);
+            var sys = SystemItems(auditSystem);
+            if (sys == null)
+            {
+                _log(L("  [?] 관리자 권한을 받지 못해 PC 전체 범위(HKLM·Defender 제외 목록 등)는 확인하지 못했습니다.", "  [?] No administrator rights: PC-wide entries (HKLM, Defender exclusions, etc.) were not checked."), LogLevel.Warn);
+                _r.Unknown[CheckId.Extra] = true;
+            }
+            else items.AddRange(sys.Where(a => a.Group == "extra"));
+            foreach (var it in items)
+            {
+                var ev = new List<string> { it.Display };
+                if (it.File != null) ev.Add(Defender.VerdictText(it.Defender));
+                var f = Add(CheckId.Extra, Severity.Review, $"[{it.Where}] {it.Name}", ev, FixKind.None, it.File ?? it.Display);
+                f.Auto = it;
+            }
         }
 
         // ------------------------------------------------------------------

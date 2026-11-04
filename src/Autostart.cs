@@ -19,7 +19,9 @@ namespace NikkeChecker
     public sealed class AutostartItem
     {
         public string Id;        // 종류·위치·이름·대상으로 만든 값. 관리자 프로세스가 다시 찾아 같은 항목만 지우는 데 쓴다
-        public string Kind;      // Run / Startup / Task / Service / Wmi
+        public string Kind;      // Run / Startup / Task / Service / Wmi  (자동 실행)
+                                 // BrowserProc / Shortcut / RegValue / RegSet / Proxy / AppInit / Exclusion / RatApp / RatProc  (추가 보안 점검)
+        public string Group;     // autostart / extra
         public string Scope;     // user (현재 사용자 권한으로 처리) / system (관리자 권한으로 처리)
         public string Where;     // 화면 표시용 위치
         public string Name;
@@ -32,8 +34,9 @@ namespace NikkeChecker
         // 삭제에 필요한 정보 (같은 프로세스 안에서만 쓰임)
         internal RegistryHive Hive; internal RegistryView View; internal string Key; internal string Value;
         internal string Item; internal string TaskPath; internal string TaskName; internal string Service; internal string Consumer;
+        internal int Pid; internal string ProcName; internal string SetValue; internal string ExclList; internal string UninstallCmd; internal bool Machine;
 
-        public string ToLine() => string.Join("\t", new[] { Id, Kind, Scope, Where, Name, Display, File, Date, Defender, Hidden ? "1" : "0" }
+        public string ToLine() => string.Join("\t", new[] { Id, Kind, Scope, Where, Name, Display, File, Date, Defender, Hidden ? "1" : "0", Group }
             .Select(s => (s ?? "").Replace("\t", " ").Replace("\r", " ").Replace("\n", " ")));
 
         public static AutostartItem FromLine(string line)
@@ -41,7 +44,7 @@ namespace NikkeChecker
             var p = line.Split('\t');
             if (p.Length < 10) return null;
             string N(string s) => s.Length == 0 ? null : s;
-            return new AutostartItem { Id = p[0], Kind = p[1], Scope = p[2], Where = p[3], Name = p[4], Display = p[5], File = N(p[6]), Date = p[7], Defender = N(p[8]), Hidden = p[9] == "1" };
+            return new AutostartItem { Id = p[0], Kind = p[1], Scope = p[2], Where = p[3], Name = p[4], Display = p[5], File = N(p[6]), Date = p[7], Defender = N(p[8]), Hidden = p[9] == "1", Group = p.Length > 10 ? p[10] : "autostart" };
         }
     }
 
@@ -138,7 +141,7 @@ namespace NikkeChecker
             {
                 var key = proto.Kind + "|" + proto.Name;
                 if (!seen.Add(key)) return;
-                proto.Hidden = true; proto.File = null;
+                proto.Hidden = true; proto.File = null; proto.Group = "autostart";
                 proto.Display = L("숨겨진 명령: ", "Hidden command: ") + target.Substring(7);
                 proto.Date = entryTime > DateTime.MinValue ? entryTime.ToString("MM-dd") : "?";
                 proto.Id = MakeId(proto.Kind, idWhere, proto.Name, target);
@@ -152,7 +155,7 @@ namespace NikkeChecker
             {
                 // 파일은 있는데 열 수 없음(권한·잠금) — 조용히 넘기지 않고 확인 대상으로
                 if (!seen.Add(target.ToLowerInvariant())) return;
-                proto.File = target; proto.Display = target + L(" (열 수 없음)", " (cannot open)"); proto.Date = "?";
+                proto.File = target; proto.Display = target + L(" (열 수 없음)", " (cannot open)"); proto.Date = "?"; proto.Group = "autostart";
                 proto.Id = MakeId(proto.Kind, idWhere, proto.Name, target);
                 list.Add(proto);
                 return;
@@ -164,6 +167,7 @@ namespace NikkeChecker
             if (sig == SigStatus.Unknown && fi.FullName.IndexOf(@"\WindowsApps\", StringComparison.OrdinalIgnoreCase) >= 0) return;   // 스토어 앱 실행 별칭
             if (sig == SigStatus.Unknown && fi.FullName.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.Windows) + "\\", StringComparison.OrdinalIgnoreCase)) return;   // 서명 확인 자체가 안 된 Windows 폴더 파일은 오탐 방지로 제외
             if (!seen.Add(fi.FullName.ToLowerInvariant())) return;
+            proto.Group = "autostart";
             proto.File = fi.FullName;
             proto.Display = fi.FullName + (sig == SigStatus.Unknown ? L(" (서명 확인 못 함)", " (signature not checked)") :
                                            sig == SigStatus.Invalid ? L(" (서명이 올바르지 않음)", " (invalid signature)") : "");
@@ -365,7 +369,7 @@ namespace NikkeChecker
                     if (string.IsNullOrEmpty(cmd)) try { cmd = c["ScriptFileName"] as string; } catch { }
                     list.Add(new AutostartItem
                     {
-                        Kind = "Wmi", Scope = "system", Where = where, Name = name, Date = "?", Hidden = string.IsNullOrEmpty(cmd),
+                        Kind = "Wmi", Group = "autostart", Scope = "system", Where = where, Name = name, Date = "?", Hidden = string.IsNullOrEmpty(cmd),
                         Display = string.IsNullOrEmpty(cmd) ? cls + L(" (스크립트)", " (script)") : cmd,
                         Consumer = name, Id = MakeId("Wmi", "wmi", name, cmd ?? cls),
                     });
@@ -400,8 +404,11 @@ namespace NikkeChecker
                         folder.GetType().InvokeMember("DeleteTask", BindingFlags.InvokeMethod, null, folder, new object[] { it.TaskName, 0 });
                         break;
                     case "Service":
-                        Remediator.RunQuiet("sc.exe", $"stop \"{it.Service}\"");
-                        if (Remediator.RunQuiet("sc.exe", $"delete \"{it.Service}\"") != 0) ok = false;
+                        Remediator.RunQuiet(Paths.Sys("sc.exe"), $"stop \"{it.Service}\"");
+                        if (Remediator.RunQuiet(Paths.Sys("sc.exe"), $"delete \"{it.Service}\"") != 0) ok = false;
+                        break;
+                    default:
+                        if (!Extra.Remove(it, log)) ok = false;
                         break;
                     case "Wmi":
                         using (var s = new ManagementObjectSearcher(@"root\subscription", "SELECT * FROM __FilterToConsumerBinding"))
@@ -415,10 +422,10 @@ namespace NikkeChecker
             }
             catch (Exception ex) { ok = false; log(L($"[X] 자동 실행 등록 삭제 실패: {it.Name} ({ex.Message})", $"[X] Could not remove the autostart entry: {it.Name} ({ex.Message})"), LogLevel.Bad); }
 
-            var win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            if (it.File != null && System.IO.File.Exists(it.File) && !it.File.StartsWith(win + "\\", StringComparison.OrdinalIgnoreCase))
+            // 실행되던 파일도 지운다 — 자동 실행 항목만, Windows·Program Files 안 파일은 등록만 끊음 (정상 프로그램 보호)
+            if (it.Group == "autostart" && it.File != null && System.IO.File.Exists(it.File) && !Paths.IsProtected(it.File))
                 if (!Remediator.DeleteFile(it.File, log)) ok = false;
-            if (ok) log(L($"[+] 자동 실행 항목 삭제: [{it.Where}] {it.Name}", $"[+] Removed autostart item: [{it.Where}] {it.Name}"), LogLevel.Action);
+            if (ok && it.Group == "autostart") log(L($"[+] 자동 실행 항목 삭제: [{it.Where}] {it.Name}", $"[+] Removed autostart item: [{it.Where}] {it.Name}"), LogLevel.Action);
             return ok;
         }
 

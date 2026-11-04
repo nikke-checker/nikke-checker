@@ -82,16 +82,23 @@ namespace NikkeChecker
                 if (f.Check == CheckId.BrowserDll) o.NeedsReboot = true;
             }
 
-            // 5. 런처 캐시
+            // 5. 런처 캐시 (흔적이 있던 런처 로그인 브라우저 프로필(CEF)도 같은 방식으로)
             foreach (var d in tbsDirs)
-                if (!DeleteDir(d, L("런처 캐시(tbs_cache)", "launcher cache (tbs_cache)"), log)) o.Failed++;
+                if (!DeleteDir(d, L("런처 캐시", "launcher cache"), log)) o.Failed++;
+
+            // 5-1. 해커 주소 DNS 기록
+            if (fixes.Any(f => f.Fix == FixKind.FlushDns))
+            {
+                RunQuiet(Paths.Sys("ipconfig.exe"), "/flushdns");
+                log(L("[+] 해커 주소 DNS 기록을 지웠습니다 (DNS 캐시 비움)", "[+] Cleared the DNS records of hacker addresses (DNS cache flushed)"), LogLevel.Action);
+            }
 
             // 6. 사용자가 고른 자동 실행 항목 — 현재 사용자 범위는 여기서, PC 전체 범위는 관리자 프로세스에서.
             //    어느 쪽이든 다시 찾아본 뒤 같은 Id 인 항목만 지운다.
             var userIds = new HashSet<string>(opt.RemoveAutostart.Where(a => a.Scope == "user").Select(a => a.Id));
             if (userIds.Count > 0)
             {
-                foreach (var it in Autostart.AuditUser(CancellationToken.None).Where(a => userIds.Contains(a.Id)))
+                foreach (var it in Autostart.AuditUser(CancellationToken.None).Concat(Extra.AuditUser(CancellationToken.None)).Where(a => userIds.Contains(a.Id)))
                     if (!Autostart.Remove(it, log)) { o.Failed++; o.NeedsReboot = true; }
             }
             var sysIds = opt.RemoveAutostart.Where(a => a.Scope == "system").Select(a => a.Id).Distinct().ToList();
@@ -133,6 +140,8 @@ namespace NikkeChecker
             }
             catch { log(L($"[!] 건너뜀 (상위 폴더 확인 실패): {path}", $"[!] Skipped (could not check the parent folder): {path}"), LogLevel.Warn); return true; }
         }
+
+        internal static bool DeleteDirPublic(string dir, string label, Logger log) => DeleteDir(dir, label, log);
 
         internal static bool DeleteFile(string f, Logger log)
         {
@@ -316,6 +325,7 @@ namespace NikkeChecker
             try
             {
                 var items = Autostart.AuditSystem(CancellationToken.None, n => sb.AppendLine(LogLevel.Detail + "\t  " + n));
+                items.AddRange(Extra.AuditSystem(CancellationToken.None, n => sb.AppendLine(LogLevel.Detail + "\t  " + n)));
                 Autostart.ScanWithDefender(items, CancellationToken.None);
                 File.WriteAllLines(outFile, items.Select(i => i.ToLine()), Encoding.UTF8);
             }
@@ -343,11 +353,13 @@ namespace NikkeChecker
                 {
                     // 요청에는 Id 만 있다. 관리자 프로세스가 직접 다시 점검해 같은 Id 인 「확인 필요」 항목만 지운다
                     var id = line.Substring(7);
-                    sysItems = sysItems ?? Autostart.AuditSystem(CancellationToken.None);
+                    sysItems = sysItems ?? Autostart.AuditSystem(CancellationToken.None).Concat(Extra.AuditSystem(CancellationToken.None)).ToList();
                     var it = sysItems.FirstOrDefault(a => a.Id == id);
                     if (it == null) { log(L($"[!] 다시 점검했을 때 찾을 수 없는 항목이라 건너뜀 ({id})", $"[!] Skipped: the item was not found when checked again ({id})"), LogLevel.Warn); continue; }
                     if (!Autostart.Remove(it, log)) failed++;
                 }
+                else if (line.StartsWith("UNDIR\t") || line.StartsWith("UNFILE\t") || line.StartsWith("UNREG\t"))
+                    failed += Uninstaller.ExecuteElevated(line, log);
             }
             return failed;
         }
@@ -362,9 +374,7 @@ namespace NikkeChecker
                 var dir = Path.GetDirectoryName(full) ?? "";
                 if (!Iocs.OldPersistenceFiles.Contains(name, StringComparer.OrdinalIgnoreCase)) return false;
                 if (!dir.EndsWith("\\" + Iocs.OldPersistenceDir, StringComparison.OrdinalIgnoreCase)) return false;
-                var roots = new[] { "ProgramW6432", "ProgramFiles", "ProgramFiles(x86)" }
-                    .Select(Environment.GetEnvironmentVariable).Where(r => !string.IsNullOrEmpty(r));
-                return roots.Any(r => string.Equals(dir, Path.Combine(r, Iocs.OldPersistenceDir), StringComparison.OrdinalIgnoreCase));
+                return Paths.ProgramFilesDirs.Any(r => string.Equals(dir, Path.Combine(r, Iocs.OldPersistenceDir), StringComparison.OrdinalIgnoreCase));
             }
             catch { return false; }
         }
@@ -391,7 +401,7 @@ namespace NikkeChecker
                     if ((attr & FileAttributes.ReadOnly) != 0) File.SetAttributes(hosts, attr);
                     foreach (var d in toAdd) log(L($"[+] hosts 차단 등록: 0.0.0.0 {d}", $"[+] hosts block added: 0.0.0.0 {d}"), LogLevel.Action);
                 }
-                RunQuiet("ipconfig", "/flushdns");
+                RunQuiet(Paths.Sys("ipconfig.exe"), "/flushdns");
             }
             catch (Exception ex)
             {

@@ -32,6 +32,7 @@ namespace NikkeChecker
         private readonly Button _fixBtn = new Button();
         private readonly Button _stopBtn = new Button();
         private readonly Button _saveBtn = new Button();
+        private readonly Button _uninstallBtn = new Button();
         private readonly RichTextBox _logBox = new RichTextBox();
         private readonly ProgressBar _progress = new ProgressBar();
         private readonly Label _summary = new Label();
@@ -117,8 +118,10 @@ namespace NikkeChecker
 
             AddItem(t, CheckId.Autostart,  L("8. 자동 실행 프로그램  (9/27 이후 생긴 서명 없는 프로그램 — PC 전체를 보려면 UAC, 읽기만 함, 판정에 영향 없음)",
                                              "8. Autostart programs  (unsigned, new since 9/27 - UAC to read PC-wide entries, read-only, no effect on the verdict)"));
-            AddItem(t, CheckId.Protection, L("9. 차단 상태 확인  (hosts, 방화벽 규칙 내용) ※ 참고용",
-                                             "9. Block status  (hosts, firewall rule contents) - for reference"));
+            AddItem(t, CheckId.Extra,      L("9. 추가 보안 점검  (해커 서버 연결·DNS 기록, 브라우저 원격 조종·강제 확장, Defender 제외, 원격 접속 프로그램, 프록시, Winlogon·IFEO·AppInit)",
+                                             "9. Extra checks  (hacker server connections, DNS, browser remote control / forced extensions, Defender exclusions, remote-access apps, proxy, Winlogon/IFEO/AppInit)"));
+            AddItem(t, CheckId.Protection, L("10. 차단 상태 확인  (hosts 7개 도메인, 방화벽 규칙 내용) ※ 참고용",
+                                             "10. Block status  (7 domains in hosts, firewall rule contents) - for reference"));
 
             // ---- 조치 옵션 ----
             var fixGroup = new GroupBox
@@ -147,8 +150,9 @@ namespace NikkeChecker
             SetupButton(_fixBtn, L("조치 실행", "Clean up"), async (s, e) => await FixAsync());
             SetupButton(_stopBtn, L("중지", "Stop"), (s, e) => _cts?.Cancel());
             SetupButton(_saveBtn, L("보고서 저장", "Save report"), (s, e) => SaveLogDialog());
+            SetupButton(_uninstallBtn, L("니케 완전 삭제…", "Remove NIKKE…"), async (s, e) => await UninstallAsync());
             _scanBtn.Font = new Font(Font, FontStyle.Bold);
-            buttons.Controls.AddRange(new Control[] { _scanBtn, _fixBtn, _stopBtn, _saveBtn });
+            buttons.Controls.AddRange(new Control[] { _scanBtn, _fixBtn, _stopBtn, _saveBtn, _uninstallBtn });
             _progress.Style = ProgressBarStyle.Marquee; _progress.MarqueeAnimationSpeed = 0;
             _progress.Width = 160; _progress.Margin = new Padding(12, 10, 3, 3);
             buttons.Controls.Add(_progress);
@@ -220,6 +224,7 @@ namespace NikkeChecker
             _scanBtn.Enabled = !Busy && _items.Any(i => i.Box.Checked);
             bool hasFix = _last != null && (_last.Fixable.Any() || _last.Review.Any()) && _fixBox.Checked;
             _fixBtn.Enabled = !Busy && _last != null && (hasFix || _tbsBox.Checked || _blockBox.Checked || _wdoBox.Checked);
+            _uninstallBtn.Enabled = !Busy && _last != null;
             _stopBtn.Enabled = Busy;
             foreach (var i in _items) i.Box.Enabled = !Busy;
             _fixBox.Enabled = _tbsBox.Enabled = _blockBox.Enabled = _wdoBox.Enabled = !Busy;
@@ -258,7 +263,9 @@ namespace NikkeChecker
                 foreach (var i in _items.Where(i => opt.Checks.Contains(i.Id)))
                 {
                     var w = r.Worst(i.Id);
-                    if (w == Severity.Critical) SetStatus(i, L("● 감염 흔적", "● Infected"), Color.Firebrick);
+                    if (w == Severity.Critical && r.Findings.Where(f => f.Check == i.Id && f.Severity == Severity.Critical).All(f => f.Past))
+                        SetStatus(i, L("● 과거 기록", "● Past record"), Color.Firebrick);
+                    else if (w == Severity.Critical) SetStatus(i, L("● 감염 흔적", "● Infected"), Color.Firebrick);
                     else if (w == Severity.Warning) SetStatus(i, L("▲ 노출 흔적", "▲ Exposed"), Color.DarkOrange);
                     else if (w == Severity.Review)
                     {
@@ -318,10 +325,28 @@ namespace NikkeChecker
                           "6. Revoke and reissue API tokens, SSH keys and cloud CLI credentials stored on this PC (.ssh, .aws, gh, etc.)."),
                         L("7. 암호화폐가 있다면 깨끗한 기기에서 만든 새 시드의 지갑으로 옮기세요.",
                           "7. If you hold cryptocurrency, move it to a wallet with a new seed phrase made on a clean device."),
-                        L("8. 안전하다는 공식 후속 공지가 나올 때까지 PC 런처를 켜지 마세요. 가장 확실한 방법은 Windows 재설치입니다.",
-                          "8. Do not open the PC launcher until Level Infinite announces it is safe. Reinstalling Windows is the safest fix."),
+                        L("8. 레벨 인피니트가 11월 4일 수정을 발표했지만, 공격자가 CDN 에 어떻게 접근했는지는 아직 알려지지 않았습니다. 차단은 유지하고, 런처를 다시 열기 전에 런처 캐시(tbs_cache)를 지우세요. 가장 확실한 방법은 Windows 재설치입니다.",
+                          "8. Level Infinite announced a fix on Nov 4, but how the attacker got into the CDN is still unknown. Keep the blocks, and delete the launcher cache (tbs_cache) before opening the launcher again. Reinstalling Windows is the safest fix."),
                         L("9. 다른 Windows 사용자 계정도 이 PC 를 쓴다면, 그 계정으로 로그인해 이 도구를 한 번 더 실행하세요.",
                           "9. If other Windows user accounts use this PC, sign in to each and run this tool again."),
+                    });
+                    break;
+                case Verdict.PastInfection:
+                    _summary.Text = L("감염됐던 기록 (과거 기록) — 해킹 프로그램이 전에 이 PC 에서 실행됐습니다. 지금 남은 해킹 파일은 없습니다.",
+                                      "PAST INFECTION (records only) - the hacking program ran on this PC before. No hacking files remain now.");
+                    _summary.ForeColor = Color.Firebrick;
+                    Log(L("[판정] 감염됐던 기록 (과거 기록): 해킹 프로그램이 전에 이 PC 에서 실행됐습니다. 지금 남아 있는 해킹 파일은 없습니다.",
+                          "[Verdict] PAST INFECTION (records only): the hacking program ran on this PC before. No hacking files remain now."), LogLevel.Bad);
+                    Log(L("       런처 기록 파일(debug.log)에 남은 기록이라 다시 검사해도 계속 나옵니다. 지금 PC 에 해킹 파일이 남아 있다는 뜻은 아닙니다.",
+                          "       These stay in the launcher log (debug.log), so they appear on every run. It does not mean hacking files are still on this PC."), LogLevel.Warn);
+                    Guide(new[]
+                    {
+                        L("1. 그때 비밀번호가 빠져나갔을 수 있습니다. 깨끗한 기기에서 비밀번호를 바꾸고 「모든 기기에서 로그아웃」 하세요 (NIKKE/Level Infinite → 구글·네이버·카카오 → 디스코드·스팀 → 은행). 2단계 인증도 켜세요.",
+                          "1. Passwords may have been stolen back then. From a clean device change them and sign out of all devices (Level Infinite, Google, Discord, Steam, banks). Turn on 2-step verification."),
+                        L("2. 이 PC 에 저장된 API 토큰·SSH 키·클라우드 CLI 자격 증명을 폐기하고 재발급하고, 암호화폐는 새 시드의 지갑으로 옮기세요.",
+                          "2. Revoke and reissue API tokens, SSH keys and cloud CLI credentials stored on this PC, and move crypto to a wallet with a new seed phrase."),
+                        L("3. [조치 실행] 으로 런처 캐시(tbs_cache) 삭제와 hosts·방화벽 차단을 하세요.", "3. Use [Clean up] to delete the launcher cache (tbs_cache) and block hosts/firewall."),
+                        L("4. " + "레벨 인피니트가 11월 4일 수정을 발표했지만, 공격자가 CDN 에 어떻게 접근했는지는 아직 알려지지 않았습니다. 차단은 유지하고, 런처를 다시 열기 전에 런처 캐시(tbs_cache)를 지우세요.", "4. " + "Level Infinite announced a fix on Nov 4, but how the attacker got into the CDN is still unknown. Keep the blocks, and delete the launcher cache (tbs_cache) before opening the launcher again."),
                     });
                     break;
                 case Verdict.Exposed:
@@ -336,10 +361,10 @@ namespace NikkeChecker
                           "1. If the NIKKE install folder was not found, enter its path and check again. Agent runs in debug.log change the verdict to INFECTED."),
                         L("2. [조치 실행] 으로 런처 캐시(tbs_cache) 삭제와 hosts·방화벽 차단을 하세요.",
                           "2. Use [Clean up] to delete the launcher cache (tbs_cache) and block hosts/firewall."),
-                        L("3. 10월 23일 이후 런처를 연 적이 있다면 감염으로 간주하고 비밀번호 변경·「모든 기기에서 로그아웃」·토큰 폐기를 하세요.",
-                          "3. If you opened the launcher on or after Oct 23, treat the PC as infected: change passwords, sign out of all devices and revoke tokens."),
-                        L("4. 안전하다는 공식 후속 공지가 나올 때까지 PC 런처를 켜지 마세요.",
-                          "4. Do not open the PC launcher until Level Infinite announces it is safe."),
+                        L("3. 9월 27일 이후 런처를 연 적이 있다면 감염으로 간주하고 비밀번호 변경·「모든 기기에서 로그아웃」·토큰 폐기를 하세요.",
+                          "3. If you opened the launcher on or after Sep 27, treat the PC as infected: change passwords, sign out of all devices and revoke tokens."),
+                        L("4. 레벨 인피니트가 11월 4일 수정을 발표했지만, 공격자가 CDN 에 어떻게 접근했는지는 아직 알려지지 않았습니다. 차단은 유지하고, 런처를 다시 열기 전에 런처 캐시(tbs_cache)를 지우세요.",
+                          "4. Level Infinite announced a fix on Nov 4, but how the attacker got into the CDN is still unknown. Keep the blocks, and delete the launcher cache (tbs_cache) before opening the launcher again."),
                     });
                     break;
                 case Verdict.NotFound:
@@ -361,8 +386,8 @@ namespace NikkeChecker
                           "1. Before opening the launcher again, delete the launcher cache (tbs_cache) and block hosts/firewall ([Clean up])."),
                         L("2. 9월 27일 이후 런처를 연 적이 있다면 중요한 비밀번호는 바꿔 두는 게 안전합니다 (10월 23일 이후라면 특히).",
                           "2. If you used the launcher after Sep 27, changing important passwords is the safe choice (especially after Oct 23)."),
-                        L("3. 안전하다는 공식 후속 공지가 나올 때까지 PC 런처를 켜지 마세요.",
-                          "3. Do not open the PC launcher until Level Infinite announces it is safe."),
+                        L("3. 레벨 인피니트가 11월 4일 수정을 발표했지만, 공격자가 CDN 에 어떻게 접근했는지는 아직 알려지지 않았습니다. 차단은 유지하고, 런처를 다시 열기 전에 런처 캐시(tbs_cache)를 지우세요.",
+                          "3. Level Infinite announced a fix on Nov 4, but how the attacker got into the CDN is still unknown. Keep the blocks, and delete the launcher cache (tbs_cache) before opening the launcher again."),
                     });
                     break;
             }
@@ -477,6 +502,73 @@ namespace NikkeChecker
             MessageBox.Show(this, msg, L("조치 결과", "Clean-up result"), MessageBoxButtons.OK, outcome.Failed == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
 
             if (wdo) await OfferOfflineScanAsync(report);
+        }
+
+        /// <summary>
+        /// NIKKE 완전 삭제 (선택, 두 번 동의 — 햄찌 v4.4·v4.5). 니케를 계속 할 사람은 쓰지 않는다.
+        /// 계정·진행 상황은 니케 서버에 있어 지워지지 않는다. 런처가 깔아 둔 실행 파일은 실행하지 않는다.
+        /// </summary>
+        private async Task UninstallAsync()
+        {
+            var q1 = L("니케를 계속 하실 분은 [아니요]를 누르세요. 게임은 그대로 둡니다.\n\n" +
+                       "니케를 이 PC 에서 완전히 삭제하실 분만 [예]를 누르세요. 다음을 지웁니다:\n" +
+                       "  • 설치 폴더 (게임·런처, 실행 파일 포함)\n  • 런처 데이터 폴더 (AppData\\Roaming\\nikke_launcher…)\n" +
+                       "  • 게임 데이터 폴더 (AppData\\LocalLow, 약 5GB)\n  • 내려받은 설치 파일 (nikkeminiloader…exe)\n" +
+                       "  • 레지스트리: 「설치된 앱」 항목, nikkelauncher:// 연결, 게임 설정\n  • 바로가기 (바탕 화면·시작 메뉴)\n\n" +
+                       "계정과 게임 진행은 니케 서버에 있어 지워지지 않습니다. [예]를 누르면 지울 목록을 보여 주고 한 번 더 묻습니다.",
+                       "Keep playing NIKKE? Press [No]. The game is left as it is.\n\n" +
+                       "Only if you want NIKKE removed from this PC completely, press [Yes]. It deletes:\n" +
+                       "  • install folder (game + launcher, executables included)\n  • launcher data folder (AppData\\Roaming\\nikke_launcher...)\n" +
+                       "  • game data folder (AppData\\LocalLow, about 5 GB)\n  • downloaded installer (nikkeminiloader...exe)\n" +
+                       "  • registry: Installed apps entry, nikkelauncher:// link, game settings\n  • shortcuts (Desktop, Start menu)\n\n" +
+                       "Your account and game progress stay on the NIKKE servers. [Yes] shows the list and asks once more.");
+            if (MessageBox.Show(this, q1, L("니케 완전 삭제 (선택)", "Remove NIKKE completely (optional)"), MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            {
+                Log(L("[-] 니케는 그대로 둡니다.", "[-] NIKKE is left as it is."), LogLevel.Detail);
+                return;
+            }
+            var installs = _last?.Installs.ToList() ?? new List<string>();
+            if (installs.Count == 0 && !string.IsNullOrWhiteSpace(_pathBox.Text) && InstallLocator.IsInstall(_pathBox.Text.Trim().Trim('"'))) installs.Add(_pathBox.Text.Trim().Trim('"'));
+            var plan = await Task.Run(() => Uninstaller.Plan(installs));
+            if (plan.Count == 0)
+            {
+                MessageBox.Show(this, L("지울 니케 파일·등록이 없습니다.", "Nothing of NIKKE is left to remove."), L("니케 완전 삭제", "Remove NIKKE"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var list = new StringBuilder(L("지울 항목:\n\n", "To be removed:\n\n"));
+            foreach (var f in plan.Folders) list.AppendLine("• " + f);
+            foreach (var f in plan.Files) list.AppendLine(L("• 설치 파일: ", "• installer: ") + f);
+            if (plan.Links.Count > 0) list.AppendLine(L($"• 바로가기 {plan.Links.Count}개 (바탕 화면·시작 메뉴)", $"• {plan.Links.Count} shortcut(s) (Desktop, Start menu)"));
+            foreach (var k in plan.UserKeys) list.AppendLine(L("• 레지스트리: HKCU\\", "• registry: HKCU\\") + k);
+            foreach (var k in plan.MachineKeys) list.AppendLine(L("• 레지스트리: HKLM\\", "• registry: HKLM\\") + k.Substring(3));
+            list.AppendLine(L("\n지운 뒤에는 되돌릴 수 없습니다. 정말 삭제할까요?", "\nThis cannot be undone. Really delete all of it?"));
+            if (MessageBox.Show(this, list.ToString(), L("니케 완전 삭제 — 마지막 확인", "Remove NIKKE - final confirmation"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            {
+                Log(L("[-] 니케는 그대로 둡니다.", "[-] NIKKE is left as it is."), LogLevel.Detail);
+                return;
+            }
+            var report = SaveReport(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), ReportName()));
+            if (report == null) { Log(L("[X] 보고서를 저장하지 못해 아무것도 지우지 않았습니다.", "[X] Could not save the report, so nothing was deleted."), LogLevel.Bad); return; }
+
+            _cts = new CancellationTokenSource(); UpdateButtons();
+            Log("", LogLevel.Info);
+            Log(L($"===== 니케 완전 삭제 (사용자 선택) {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====", $"===== Remove NIKKE (user choice) {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====="), LogLevel.Header);
+            int failed = 0;
+            try
+            {
+                failed = await Task.Run(() =>
+                {
+                    int fl = Uninstaller.Execute(plan, SafeLog, out var elevated);
+                    if (elevated.Count > 0) fl += Remediator.RunElevated(elevated, SafeLog, out _);
+                    return fl;
+                });
+            }
+            finally { _cts.Dispose(); _cts = null; UpdateButtons(); }
+            if (failed > 0)
+                Log(L("[주의] 일부 삭제 실패. PC 를 재시작한 뒤 다시 실행하세요.", "[Note] Some items could not be removed. Restart the PC and run again."), LogLevel.Bad);
+            else
+                Log(L("[완료] 니케 삭제 완료. 재설치는 공식 홈페이지에서 런처를 새로 받으세요.", "[Done] NIKKE removed. To reinstall, get a new launcher from the official website."), LogLevel.Ok);
+            SaveReport(report);
         }
 
         /// <summary>Defender 오프라인 검사: 재부팅이 필요하므로 한 번 더 묻는다. 24시간 안에 이미 했으면 건너뜀.</summary>

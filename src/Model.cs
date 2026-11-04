@@ -7,7 +7,7 @@ using static NikkeChecker.I18n;
 
 namespace NikkeChecker
 {
-    public enum CheckId { BrowserDll, Clsid, Processes, LauncherData, Temp, InstallLogs, FullScan, Autostart, Protection }
+    public enum CheckId { BrowserDll, Clsid, Processes, LauncherData, Temp, InstallLogs, FullScan, Autostart, Extra, Protection }
 
     // Review = 「확인 필요」(자동 실행 프로그램). 판정에는 영향이 없고, 사용자가 고른 것만 지운다.
     public enum Severity { Info, Review, Warning, Critical }
@@ -23,9 +23,11 @@ namespace NikkeChecker
         DeleteRegistryKey,   // HKCU 하위 키
         DeleteTbsCache,      // 런처 tbs_cache 폴더
         KillProcess,         // PID
+        FlushDns,            // DNS 캐시 비우기
     }
 
-    public enum Verdict { Infected, Exposed, Clean, NotFound }
+    // PastInfection = 감염됐던 기록만 남음 (런처 로그). 지금 남은 파일·연결은 없음 (햄찌 v4.2)
+    public enum Verdict { Infected, PastInfection, Exposed, Clean, NotFound }
 
     public sealed class Finding
     {
@@ -39,6 +41,8 @@ namespace NikkeChecker
         public string Browser;    // DeleteDirectory: 종료할 브라우저 프로세스 이름
         public string BrowserHint; // 프로세스 이름이 흔할 때(browser.exe) 실행 파일 경로에 들어 있어야 하는 문자열
         public AutostartItem Auto;  // Autostart 항목
+        public bool Past;           // 런처 로그에 남은 지난 기록 (지울 수 있는 현재 파일이 아님)
+        public bool LauncherRunning; // 실행 중인 런처 — 다른 감염 흔적이 있을 때만 감염 (MotherSphere 0.5.0)
 
         public string FixDescription
         {
@@ -52,6 +56,7 @@ namespace NikkeChecker
                     case FixKind.DeleteRegistryKey: return L("레지스트리 키 삭제: HKCU\\", "Delete registry key: HKCU\\") + Target;
                     case FixKind.DeleteTbsCache: return L("런처 캐시 삭제: ", "Delete launcher cache: ") + Target;
                     case FixKind.KillProcess: return L($"프로세스 종료: {Target} (PID {Pid})", $"End process: {Target} (PID {Pid})");
+                    case FixKind.FlushDns: return L("DNS 캐시 비우기", "Clear the DNS cache");
                     default: return null;
                 }
             }
@@ -86,7 +91,8 @@ namespace NikkeChecker
         {
             get
             {
-                if (Findings.Any(f => f.Severity == Severity.Critical)) return Verdict.Infected;
+                var crit = Findings.Where(f => f.Severity == Severity.Critical).ToList();
+                if (crit.Count > 0) return crit.All(f => f.Past) ? Verdict.PastInfection : Verdict.Infected;
                 if (Findings.Any(f => f.Severity == Severity.Warning)) return Verdict.Exposed;
                 bool lookedForNikke = Checked.Contains(CheckId.InstallLogs) || Checked.Contains(CheckId.LauncherData);
                 if (lookedForNikke && Installs.Count == 0 && LauncherDataDirs.Count == 0) return Verdict.NotFound;
@@ -96,6 +102,7 @@ namespace NikkeChecker
 
         public IEnumerable<Finding> Fixable => Findings.Where(f => f.Fix != FixKind.None && (f.Severity == Severity.Warning || f.Severity == Severity.Critical));
         public IEnumerable<AutostartItem> Review => Findings.Where(f => f.Auto != null).Select(f => f.Auto);
+        public List<string> CefDirs = new List<string>();   // 흔적이 있는 런처 로그인 브라우저 프로필
     }
 
     public delegate void Logger(string message, LogLevel level);
@@ -113,7 +120,8 @@ namespace NikkeChecker
         public static readonly string[] OldPersistenceFiles = { "platform_experience_helper.dll", "platform_experience_helper.dll.old", "old-clsid.txt" };
         public const string OldPersistenceDir = @"Google\Chrome\Application\PlatformExperienceHelper";
 
-        public static readonly string[] BlockDomains = { "insightjs.com", "analytics.insightjs.com", "insightjs.org" };
+        // 하위 도메인은 neutralnikke·whykusanagi 목록 (햄찌 v4.2)
+        public static readonly string[] BlockDomains = { "insightjs.com", "www.insightjs.com", "analytics.insightjs.com", "portal.insightjs.com", "docs.insightjs.com", "insightjs.org", "analytics.insightjs.org" };
         public static readonly string[] C2Ips = { "89.127.233.127", "89.126.250.172" };
         public const string FirewallRuleName = "Block_Nikke_Malware_C2";
         public const string LegacyFirewallRuleName = "Block_Nikke_Malware_C2_89.127.233.127";
@@ -128,9 +136,10 @@ namespace NikkeChecker
             ("insightjs.org", "+EQMCXxbp1N4L3mxYGR66hSUD0cvdir6DDtJBLH3wPk="),
         };
 
-        public const long KnownAgentSize = 205135;
+        // 알려진 에이전트 크기: 205,135 bytes (10/31 이후 빌드), 165,108 bytes (10/23 빌드, k2f.lua) — MotherSphere 0.4.1
+        public static readonly long[] KnownAgentSizes = { 205135, 165108 };
         // insight.bundle 빌드 (ETag "<mtime hex>-3214f")
-        public static readonly string[] KnownBuildEtags = { "6ae78037", "6ae8ccff", "6ae90538", "6ae9d408", "6ae9f628" };
+        public static readonly string[] KnownBuildEtags = { "6ae60b83", "6ae69086", "6ae78037", "6ae8ccff", "6ae90538", "6ae9d408", "6ae9f628" };
 
         public static readonly Regex Hex64 = new Regex("^[0-9a-fA-F]{64}$", RegexOptions.Compiled);
         public static readonly Regex Hex22Tmp = new Regex("^[0-9a-f]{22}$", RegexOptions.Compiled);
@@ -161,7 +170,11 @@ namespace NikkeChecker
         {
             Path.Combine(AppData, "nikke_launcher"),
             Path.Combine(AppData, "nikke_launcher_hmt"),
+            Path.Combine(AppData, "nikke_launcher_google"),   // 로그인 방식별 프로필 폴더 (햄찌 v4.2, neutralnikke)
         };
+
+        // 런처 로그인 화면(tbs_browser.exe)의 브라우저 프로필 (MotherSphere 0.5.0). 다른 CEF 프로그램도 쓰는 기본 폴더라 흔적이 있을 때만 보고
+        public static string CefUserData => Path.Combine(LocalAppData, @"CEF\User Data");
 
         // (표시 이름, User Data 경로, 프로세스 이름) — PlatformExperienceHelper 지속성 점검 대상
         // Chromium 계열 브라우저: (표시 이름, User Data 경로, 프로세스 이름, 실행 파일 경로 힌트)

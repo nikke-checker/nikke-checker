@@ -24,8 +24,7 @@ namespace NikkeChecker
                 }
             }
             catch { }
-            var pf = Path.Combine(Environment.GetEnvironmentVariable("ProgramW6432") ?? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                @"Windows Defender\MpCmdRun.exe");
+            var pf = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Windows Defender\MpCmdRun.exe");
             return File.Exists(pf) ? pf : null;
         }
 
@@ -73,7 +72,7 @@ namespace NikkeChecker
                          "Windows Defender is not the active antivirus on this PC, so the offline scan cannot run. Run a full scan with your antivirus.");
             try
             {
-                var sysDrive = Environment.GetEnvironmentVariable("SystemDrive") ?? "C:";
+                var sysDrive = Paths.Windows.Substring(0, 2);
                 using (var s = new ManagementObjectSearcher(@"root\cimv2\Security\MicrosoftVolumeEncryption",
                     $"SELECT ProtectionStatus FROM Win32_EncryptableVolume WHERE DriveLetter='{sysDrive}'"))
                     foreach (ManagementObject o in s.Get())
