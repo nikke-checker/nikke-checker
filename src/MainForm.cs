@@ -149,7 +149,7 @@ namespace NikkeChecker
                 _checks[id] = new CheckBox { Text = Friendly(id), Checked = true, AutoSize = true, Font = Theme.Font(9.5f), BackColor = Color.Transparent, Margin = new Padding(0, 6, 0, 0) };
             _pathBox.Font = Theme.Font(9.5f);
             _pathBox.BorderStyle = BorderStyle.FixedSingle;
-            SetupOption(_optClean, L("발견한 해킹 흔적 지우기 (브라우저·런처가 잠시 꺼집니다)", "Remove the hacking traces found (browsers and the launcher close for a moment)"), true);
+            SetupOption(_optClean, L("발견한 해킹 흔적 지우기 (브라우저·런처·게임이 잠시 꺼집니다)", "Remove the hacking traces found (browsers, the launcher and the game close for a moment)"), true);
             SetupOption(_optTbs, L("런처 캐시 지우기 (런처를 다시 열기 전에 권장, 런처 로그인만 다시 하면 됨)", "Delete the launcher cache (recommended before reopening the launcher; you only sign in again)"), true);
             SetupOption(_optBlock, L("해커 서버 차단 (hosts·방화벽, 관리자 확인 창이 뜹니다)", "Block the hacker servers (hosts + firewall, an admin prompt appears)"), true);
             SetupOption(_optWdo, L("마지막에 Windows 백신 정밀 검사 (재부팅, 약 15분)", "Finally run a Windows Defender deep scan (restart, about 15 min)"), false);
@@ -551,7 +551,7 @@ namespace NikkeChecker
             if (fixes.Count > 20) plan.AppendLine(L($"• … 외 {fixes.Count - 20}건", $"• … {fixes.Count - 20} more"));
             if (opt.AlwaysDeleteTbsCache) plan.AppendLine(L("• 런처 캐시(tbs_cache) 삭제", "• Delete the launcher cache (tbs_cache)"));
             if (fixes.Any(f => f.Browser != null)) plan.AppendLine(L("• 관련 브라우저 종료", "• Close the affected browsers"));
-            if (fixes.Count > 0 || opt.AlwaysDeleteTbsCache) plan.AppendLine(L("• NIKKE 런처 종료", "• Close the NIKKE launcher"));
+            if (fixes.Count > 0 || opt.AlwaysDeleteTbsCache) plan.AppendLine(L("• NIKKE 런처와 게임 종료", "• Close the NIKKE launcher and the game"));
             if (review.Count > 0) plan.AppendLine(L($"• 확인 필요 항목 {review.Count}개 — 다음 창에서 지울 것을 직접 고릅니다", $"• {review.Count} items to check - you pick which to remove in the next window"));
             if (opt.Block) plan.AppendLine(L("• hosts·방화벽으로 해커 서버 차단 (관리자 확인 창)", "• Block the hacker servers in hosts and the firewall (admin prompt)"));
             if (wdo) plan.AppendLine(L("• 마지막에 Windows 백신 정밀 검사 (재부팅 전에 한 번 더 묻습니다)", "• Finally a Windows Defender deep scan (you are asked again before the restart)"));
