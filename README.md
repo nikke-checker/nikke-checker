@@ -50,10 +50,9 @@ dotnet build -c Release
 결과물: `src/bin/Release/net48/NikkeChecker.exe` (Linux 에서도 빌드됩니다)
 
 ## 릴리스
-GitHub 의 **Actions → Release → Run workflow** 로 실행하면 GitHub Actions(ubuntu-latest)가 빌드해
-실행한 커밋에 태그를 만들고 릴리스에 exe 와 SHA-256 을 올립니다.
-`version` 입력을 비우면 `src/NikkeChecker.csproj` 의 `<Version>` 앞에 `v` 를 붙여 사용합니다.
-(`v*` 태그를 직접 푸시해도 같은 동작을 합니다.)
+`src/NikkeChecker.csproj` 의 `<Version>` 을 올려 main 에 푸시하면 GitHub Actions(ubuntu-latest)가
+`v<Version>` 릴리스가 아직 없을 때 자동으로 빌드해, 그 커밋에 태그를 만들고 릴리스에 exe 와 SHA-256 을 올립니다.
+같은 버전의 릴리스가 이미 있으면 건너뜁니다. (`v*` 태그를 직접 푸시해도 같은 동작을 합니다.)
 
 릴리스 exe 에는 빌드 출처 증명(artifact attestation)이 붙습니다. 내려받은 파일이 이 리포지토리의
 Actions 에서 공개 소스로 빌드된 것인지 [GitHub CLI](https://cli.github.com/) 로 확인할 수 있습니다.

@@ -1,17 +1,17 @@
 name: Release
 
-# Actions 탭에서 수동 실행(Run workflow)하면 Linux 러너에서 .NET Framework 4.8 exe 를 빌드하고
-# 실행한 커밋에 태그를 만들어 릴리스에 첨부한다. v* 태그를 푸시해도 같은 동작을 한다.
+# main 에 푸시하면 src/NikkeChecker.csproj 의 <Version> 으로 태그(v<Version>)를 정하고,
+# 그 릴리스가 아직 없을 때만 Linux 러너에서 .NET Framework 4.8 exe 를 빌드해 릴리스를 만든다.
+# 새 버전을 배포하려면 <Version> 만 올려서 main 에 푸시하면 된다. v* 태그를 푸시해도 동작한다.
 # (net48 참조 어셈블리 패키지로 빌드하므로 Windows 러너가 필요 없음)
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: '릴리스 태그 (비우면 src/NikkeChecker.csproj 의 <Version> 앞에 v 를 붙여 사용)'
-        required: false
-        default: ''
   push:
+    branches: [main]
     tags: ['v*']
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -27,43 +27,52 @@ jobs:
       - name: Resolve tag
         id: tag
         env:
-          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             TAG="$GITHUB_REF_NAME"
-          elif [ -n "$INPUT_VERSION" ]; then
-            TAG="$INPUT_VERSION"
           else
             TAG="v$(grep -oP '(?<=<Version>)[^<]+' src/NikkeChecker.csproj)"
           fi
-          case "$TAG" in v*) ;; *) TAG="v$TAG" ;; esac
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "릴리스 태그: $TAG"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$TAG 릴리스가 이미 있어 건너뜁니다. 새로 배포하려면 csproj 의 <Version> 을 올리세요."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "릴리스 태그: $TAG"
+          fi
 
       - uses: actions/setup-dotnet@v4
+        if: steps.tag.outputs.skip != 'true'
         with:
           dotnet-version: '8.0.x'
 
       - name: Build
+        if: steps.tag.outputs.skip != 'true'
         run: dotnet build src/NikkeChecker.csproj -c Release -nologo
 
       - name: Checksum
+        if: steps.tag.outputs.skip != 'true'
         id: sum
         run: |
           cp src/bin/Release/net48/NikkeChecker.exe NikkeChecker.exe
           echo "sha256=$(sha256sum NikkeChecker.exe | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
+        if: steps.tag.outputs.skip != 'true'
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: NikkeChecker.exe
 
       - uses: actions/upload-artifact@v4
+        if: steps.tag.outputs.skip != 'true'
         with:
           name: NikkeChecker
           path: NikkeChecker.exe
 
       - name: Create release
+        if: steps.tag.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
