@@ -29,7 +29,6 @@ namespace NikkeChecker
             (CheckId.LauncherData, "런처 데이터 폴더 (k2f.agent, insightjs 캐시, HSTS·네트워크 기록)"),
             (CheckId.Temp,         "임시 폴더 k2f 파일"),
             (CheckId.InstallLogs,  "니케 설치 폴더 로그 / 저장된 에이전트 파일"),
-            (CheckId.Exposure,     "악성코드가 접근할 수 있었던 데이터"),
             (CheckId.Protection,   "차단 상태 (hosts / 방화벽)"),
         };
 
@@ -52,7 +51,6 @@ namespace NikkeChecker
                     case CheckId.LauncherData: CheckLauncherData(); break;
                     case CheckId.Temp: CheckTemp(); break;
                     case CheckId.InstallLogs: CheckInstalls(opt.InstallPath); break;
-                    case CheckId.Exposure: CheckExposure(); break;
                     case CheckId.Protection: CheckProtection(); break;
                 }
                 if (!_r.Findings.Skip(before).Any(f => f.Severity != Severity.Info) && !_r.Unknown.ContainsKey(id))
@@ -461,54 +459,7 @@ namespace NikkeChecker
         }
 
         // ------------------------------------------------------------------
-        // 7. 악성코드가 접근할 수 있었던 데이터 (존재 여부만 확인, 열지 않음)
-        // ------------------------------------------------------------------
-        private void CheckExposure()
-        {
-            var logins = new List<string>();
-            var wallets = new List<string>();
-            foreach (var b in Iocs.Browsers)
-            {
-                if (!Directory.Exists(b.Path)) continue;
-                var profiles = new List<string> { b.Path };
-                profiles.AddRange(FileUtil.Dirs(b.Path));
-                foreach (var p in profiles)
-                {
-                    if (File.Exists(Path.Combine(p, "Login Data")) || File.Exists(Path.Combine(p, "Login Data For Account")))
-                        logins.Add($"{b.Name} - {Path.GetFileName(p)}");
-                    var ext = Path.Combine(p, "Extensions");
-                    if (!Directory.Exists(ext)) continue;
-                    foreach (var (id, name) in Iocs.Wallets)
-                        if (Directory.Exists(Path.Combine(ext, id))) wallets.Add($"{name} ({b.Name} - {Path.GetFileName(p)})");
-                }
-            }
-            var ff = Path.Combine(Iocs.AppData, @"Mozilla\Firefox\Profiles");
-            foreach (var p in FileUtil.Dirs(ff))
-                if (File.Exists(Path.Combine(p, "logins.json")) || File.Exists(Path.Combine(p, "key4.db")))
-                    logins.Add("Firefox - " + Path.GetFileName(p));
-
-            var secrets = new List<string>();
-            foreach (var (name, rel) in Iocs.Secrets)
-            {
-                var path = Path.Combine(Iocs.UserProfile, rel);
-                if (File.Exists(path) || Directory.Exists(path)) secrets.Add($"{name}: {path}");
-            }
-            var ssh = Path.Combine(Iocs.UserProfile, ".ssh");
-            foreach (var f in FileUtil.Files(ssh, 0))
-            {
-                var n = Path.GetFileName(f);
-                if (n.StartsWith("id_", StringComparison.OrdinalIgnoreCase) && !n.EndsWith(".pub", StringComparison.OrdinalIgnoreCase))
-                    secrets.Add("SSH 개인 키: " + f);
-            }
-
-            if (logins.Count > 0) Add(CheckId.Exposure, Severity.Info, $"비밀번호 저장소가 있는 브라우저 프로필 {logins.Count}개 → 저장된 비밀번호 전부 변경 권장", logins);
-            if (wallets.Count > 0) Add(CheckId.Exposure, Severity.Info, $"암호화폐 지갑 확장 {wallets.Count}개 → 깨끗한 기기에서 새 시드로 자산 이전 권장", wallets);
-            if (secrets.Count > 0) Add(CheckId.Exposure, Severity.Info, $"인증 정보 파일 {secrets.Count}개 → 토큰·키 폐기 후 재발급 권장", secrets);
-            if (logins.Count + wallets.Count + secrets.Count == 0) _log("  [-] 해당 데이터 없음", LogLevel.Detail);
-        }
-
-        // ------------------------------------------------------------------
-        // 8. 차단 상태 (판정에 영향 없음)
+        // 7. 차단 상태 (판정에 영향 없음)
         // ------------------------------------------------------------------
         private void CheckProtection()
         {

@@ -16,8 +16,7 @@
 | 4 | 런처 데이터 `%APPDATA%\nikke_launcher(_hmt)` | `k2f.agent` / `k2f_chan`, HSTS(`TransportSecurity`)·`Network Persistent State` 의 analytics.insightjs.com | `Cache`/`Code Cache` 의 insightjs, HSTS 의 insightjs.com/org, `Reporting and NEL` |
 | 5 | 임시 폴더 | `k2f-bcreds-*`(탈취한 자격 증명), `k2f_screen_*.jpg`(화면 캡처) | |
 | 6 | 니케 설치 폴더 | `debug.log` 의 `k2f_chan`·analytics.insightjs.com·insight.bundle, `Launcher\log` 의 insight.bundle 다운로드 기록, LuaJIT 바이트코드(`1B 4C 4A`) 에이전트 파일 | insightjs 만 있는 로그 |
-| 7 | 유출 가능 데이터 (참고) | 저장된 비밀번호가 있는 브라우저 프로필, 지갑 확장 28종, 인증 파일(SSH 키, 클라우드 CLI 토큰 등) — 존재 여부만 확인하고 열지 않음 | |
-| 8 | 차단 상태 (참고) | hosts 의 세 도메인, 방화벽 규칙 | |
+| 7 | 차단 상태 (참고) | hosts 의 세 도메인, 방화벽 규칙 | |
 
 설치 폴더는 레지스트리 `GameInstallPath`·`UninstallString`, `nikkelauncher` 프로토콜, `url_protocol.reg` 에서 먼저 찾고, 없으면 드라이브를 탐색합니다.
 `tinyget.mem.log` 의 ETag 로 내려받은 에이전트 빌드(업로드 시각, 크기)를 보여 줍니다.
@@ -33,13 +32,12 @@
 5. 런처 캐시 `tbs_cache` 삭제 (흔적이 없어도 권장 옵션)
 6. Temp 의 `k2f*` 파일, 저장된 에이전트 파일 삭제 (로그 자체는 증거로 남김)
 7. (관리자, UAC) Program Files 의 구버전 지속성 파일 삭제, hosts 에 세 도메인 차단, 방화벽에서 `89.127.233.127`, `89.126.250.172` 아웃바운드 차단
-8. (선택) 브라우저 쿠키 초기화
 
 프로그램은 일반 권한으로 실행되고, 관리자 작업만 UAC 로 승격한 자기 자신에게 맡깁니다.
 관리자 계정이 다른 경우에도 실제 사용자의 HKCU/AppData 를 점검하기 위해서입니다.
 승격된 프로세스는 정해진 구버전 지속성 파일 외에는 삭제하지 않습니다.
 
-조치 후에도 감염 판정이었다면 깨끗한 기기에서 비밀번호 변경, 모든 세션 로그아웃, 토큰·SSH 키 재발급, 지갑 이전을 하세요.
+조치 후에도 감염 판정이었다면 깨끗한 기기에서 비밀번호 변경, 브라우저 설정에서 쿠키 삭제, 모든 세션 로그아웃, 토큰·SSH 키·클라우드 CLI 자격 증명 재발급, 지갑 이전을 하세요.
 흔적이 없다고 깨끗함이 보장되지는 않습니다.
 
 ## 빌드
@@ -61,7 +59,7 @@ gh attestation verify NikkeChecker.exe --repo nikke-checker/nikke-checker
 ```
 
 ## 참고
-진단 규칙(IoC, HSTS 키, 에이전트 빌드 ETag, 지갑 확장·인증 파일 목록)은 이 사고를 처음 분석한
+진단 규칙(IoC, HSTS 키, 에이전트 빌드 ETag)은 이 사고를 처음 분석한
 [MotherSphere/NIKKE-Launcher-Check](https://github.com/MotherSphere/NIKKE-Launcher-Check) 의 문서와
 [분석 글](https://gist.github.com/MotherSphere/d6c049a09ba8ac3085c51ee9df24a4e5)을 바탕으로 했습니다.
 코드는 이 저장소에서 새로 작성했습니다.

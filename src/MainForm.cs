@@ -25,7 +25,6 @@ namespace NikkeChecker
         private readonly CheckBox _fixBox = new CheckBox();
         private readonly CheckBox _tbsBox = new CheckBox();
         private readonly CheckBox _blockBox = new CheckBox();
-        private readonly CheckBox _cookieBox = new CheckBox();
         private readonly Button _scanBtn = new Button();
         private readonly Button _fixBtn = new Button();
         private readonly Button _stopBtn = new Button();
@@ -91,8 +90,7 @@ namespace NikkeChecker
                 Text = "비워 두면 런처가 기록한 설치 경로를 찾고, 없으면 드라이브를 탐색합니다 (수 분 걸릴 수 있음)",
             });
 
-            AddItem(t, CheckId.Exposure,   "7. 유출 가능 데이터 확인  (저장된 비밀번호, 지갑 확장, 인증 파일 — 파일을 열지 않음) ※ 참고용");
-            AddItem(t, CheckId.Protection, "8. 차단 상태 확인  (hosts, 방화벽) ※ 참고용");
+            AddItem(t, CheckId.Protection, "7. 차단 상태 확인  (hosts, 방화벽) ※ 참고용");
             _items.First(i => i.Id == CheckId.InstallLogs).Box.CheckedChanged += (s, e) => UpdateButtons();
 
             // ---- 조치 옵션 ----
@@ -104,8 +102,7 @@ namespace NikkeChecker
             SetupOption(_fixBox, "발견된 악성 항목 제거  (레지스트리 키 → 프로세스 종료 → DLL 폴더, Temp k2f 파일, 에이전트 파일)", true);
             SetupOption(_tbsBox, "런처 캐시(tbs_cache) 삭제  (흔적이 없어도 런처를 다시 열기 전에 권장)", true);
             SetupOption(_blockBox, $"hosts 도메인 차단 + 방화벽 IP 차단 ({string.Join(", ", Iocs.C2Ips)})  — 관리자 권한(UAC) 필요", true);
-            SetupOption(_cookieBox, "브라우저 쿠키 초기화  (모든 브라우저 강제 종료, 모든 사이트 로그아웃)", false);
-            fixFlow.Controls.AddRange(new Control[] { _fixBox, _tbsBox, _blockBox, _cookieBox });
+            fixFlow.Controls.AddRange(new Control[] { _fixBox, _tbsBox, _blockBox });
 
             // ---- 버튼 ----
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
@@ -173,10 +170,10 @@ namespace NikkeChecker
         {
             _scanBtn.Enabled = !Busy && _items.Any(i => i.Box.Checked);
             bool hasFix = _last != null && _last.Fixable.Any() && _fixBox.Checked;
-            _fixBtn.Enabled = !Busy && _last != null && (hasFix || _tbsBox.Checked || _blockBox.Checked || _cookieBox.Checked);
+            _fixBtn.Enabled = !Busy && _last != null && (hasFix || _tbsBox.Checked || _blockBox.Checked);
             _stopBtn.Enabled = Busy;
             foreach (var i in _items) i.Box.Enabled = !Busy;
-            _fixBox.Enabled = _tbsBox.Enabled = _blockBox.Enabled = _cookieBox.Enabled = !Busy;
+            _fixBox.Enabled = _tbsBox.Enabled = _blockBox.Enabled = !Busy;
             _progress.MarqueeAnimationSpeed = Busy ? 30 : 0;
             bool logsOn = _items.First(i => i.Id == CheckId.InstallLogs).Box.Checked;
             _pathBox.Enabled = _browseBtn.Enabled = logsOn && !Busy;
@@ -215,7 +212,7 @@ namespace NikkeChecker
                     if (w == Severity.Critical) SetStatus(i, "● 감염 흔적", Color.Firebrick);
                     else if (w == Severity.Warning) SetStatus(i, "▲ 노출 흔적", Color.DarkOrange);
                     else if (r.Unknown.ContainsKey(i.Id)) SetStatus(i, "? 확인 불가", Color.DarkGoldenrod);
-                    else if (i.Id == CheckId.Exposure || i.Id == CheckId.Protection) SetStatus(i, "ⓘ 결과 참고", Color.SteelBlue);
+                    else if (i.Id == CheckId.Protection) SetStatus(i, "ⓘ 결과 참고", Color.SteelBlue);
                     else SetStatus(i, "○ 이상 없음", Color.SeaGreen);
                 }
                 ReportVerdict(r);
@@ -254,8 +251,8 @@ namespace NikkeChecker
                         "2. [조치 실행] 을 누르세요. 보고서가 바탕화면에 먼저 저장된 뒤 레지스트리 키 → 프로세스 → DLL → 런처 캐시 순으로 제거합니다.",
                         "3. DLL 이 사용 중이라 지워지지 않으면 Windows 를 재시작한 뒤 이 도구로 다시 점검·조치하세요.",
                         "4. 깨끗한 기기(휴대폰 등)에서 비밀번호 변경: NIKKE/Level Infinite 계정 → 이메일, Discord, 은행, 브라우저에 저장된 모든 비밀번호.",
-                        "5. 해당 서비스에서 모든 세션 로그아웃 (탈취된 쿠키는 비밀번호 없이도 쓰일 수 있음).",
-                        "6. 이 PC 에 저장된 API 토큰·SSH 키를 폐기하고 재발급하세요 (항목 7 결과 참고).",
+                        "5. 해당 서비스에서 모든 세션 로그아웃 (탈취된 쿠키는 비밀번호 없이도 쓰일 수 있음). 이 PC 의 브라우저 쿠키도 브라우저 설정에서 삭제하세요.",
+                        "6. 이 PC 에 저장된 API 토큰·SSH 키·클라우드 CLI 자격 증명(.ssh, .aws, gh 등)을 폐기하고 재발급하세요.",
                         "7. 암호화폐가 있다면 깨끗한 기기에서 만든 새 시드의 지갑으로 옮기세요.",
                         "8. Level Infinite 가 수정을 확인할 때까지 NIKKE 런처를 열지 마세요. 가장 확실한 방법은 OS 재설치입니다.",
                     });
@@ -302,7 +299,7 @@ namespace NikkeChecker
             var opt = new FixOptions
             {
                 DeleteFindings = _fixBox.Checked, AlwaysDeleteTbsCache = _tbsBox.Checked,
-                Block = _blockBox.Checked, ClearCookies = _cookieBox.Checked,
+                Block = _blockBox.Checked,
             };
             var fixes = opt.DeleteFindings && _last != null ? _last.Fixable.ToList() : new List<Finding>();
 
@@ -312,7 +309,6 @@ namespace NikkeChecker
             if (opt.AlwaysDeleteTbsCache) plan.AppendLine("• 런처 캐시(tbs_cache) 삭제");
             if (fixes.Any(f => f.Browser != null)) plan.AppendLine("• 관련 브라우저 강제 종료");
             if (fixes.Count > 0 || opt.AlwaysDeleteTbsCache) plan.AppendLine("• NIKKE 런처 강제 종료");
-            if (opt.ClearCookies) plan.AppendLine("• 모든 브라우저 강제 종료 후 쿠키 삭제 (모든 사이트 로그아웃)");
             if (opt.Block) plan.AppendLine($"• hosts 도메인 차단, 방화벽 IP 차단 ({string.Join(", ", Iocs.C2Ips)}) — UAC 요청");
             plan.AppendLine("\n실행 전에 현재 보고서를 바탕화면에 저장합니다 (삭제하면 증거가 사라지므로).");
             plan.AppendLine("브라우저에서 작업 중인 내용이 있다면 먼저 저장해 주세요. 계속할까요?");

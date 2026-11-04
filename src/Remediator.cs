@@ -16,7 +16,6 @@ namespace NikkeChecker
         public bool DeleteFindings;
         public bool AlwaysDeleteTbsCache;
         public bool Block;
-        public bool ClearCookies;
     }
 
     public sealed class FixOutcome
@@ -83,8 +82,6 @@ namespace NikkeChecker
             // 5. 런처 캐시
             foreach (var d in tbsDirs)
                 if (!DeleteDir(d, "런처 캐시(tbs_cache)", log)) o.Failed++;
-
-            if (opt.ClearCookies) ClearBrowserCookies(log);
 
             // 6. 관리자 작업
             var elevatedFiles = fixes.Where(f => f.Fix == FixKind.DeleteFileElevated).Select(f => f.Target).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -158,33 +155,6 @@ namespace NikkeChecker
                 log($"[+] 프로세스 종료: {name} (PID {pid})", LogLevel.Action);
             }
             catch (Exception ex) { log($"[X] 프로세스 종료 실패: {p.ProcessName} ({ex.Message})", LogLevel.Bad); }
-        }
-
-        public static void ClearBrowserCookies(Logger log)
-        {
-            log("[*] 브라우저 종료 후 쿠키 DB 를 삭제합니다 (모든 사이트에서 로그아웃됩니다)", LogLevel.Info);
-            KillByName(Iocs.Browsers.Select(b => b.Process).Concat(new[] { "firefox" }).Distinct(), log);
-            Thread.Sleep(1000);
-            foreach (var b in Iocs.Browsers)
-            {
-                if (!Directory.Exists(b.Path)) continue;
-                int n = FileUtil.Files(b.Path, 4)
-                    .Where(f => Path.GetFileName(f).Equals("Cookies", StringComparison.OrdinalIgnoreCase) ||
-                                Path.GetFileName(f).Equals("Cookies-journal", StringComparison.OrdinalIgnoreCase))
-                    .Count(TryDelete);
-                log($"[+] [{b.Name}] 쿠키 DB {n}개 삭제", LogLevel.Action);
-            }
-            var ff = Path.Combine(Iocs.AppData, @"Mozilla\Firefox\Profiles");
-            if (Directory.Exists(ff))
-            {
-                int n = FileUtil.Files(ff, 2).Where(f => Path.GetFileName(f).StartsWith("cookies.sqlite", StringComparison.OrdinalIgnoreCase)).Count(TryDelete);
-                log($"[+] [Firefox] 쿠키 DB {n}개 삭제", LogLevel.Action);
-            }
-        }
-
-        private static bool TryDelete(string f)
-        {
-            try { File.SetAttributes(f, FileAttributes.Normal); File.Delete(f); return !File.Exists(f); } catch { return false; }
         }
 
         // ------------------------------------------------------------------

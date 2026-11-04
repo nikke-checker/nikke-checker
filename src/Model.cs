@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace NikkeChecker
 {
-    public enum CheckId { BrowserDll, Clsid, Processes, LauncherData, Temp, InstallLogs, Exposure, Protection }
+    public enum CheckId { BrowserDll, Clsid, Processes, LauncherData, Temp, InstallLogs, Protection }
 
     public enum Severity { Info, Warning, Critical }
 
@@ -135,7 +135,6 @@ namespace NikkeChecker
 
         public static string AppData => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         public static string LocalAppData => Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        public static string UserProfile => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         public static string[] LauncherDataDirs => new[]
         {
@@ -143,7 +142,7 @@ namespace NikkeChecker
             Path.Combine(AppData, "nikke_launcher_hmt"),
         };
 
-        // (표시 이름, User Data 경로, 프로세스 이름) — 에이전트의 browserscan 대상과 동일
+        // (표시 이름, User Data 경로, 프로세스 이름) — PlatformExperienceHelper 지속성 점검 대상
         public static (string Name, string Path, string Process)[] Browsers => new[]
         {
             ("Chrome",   System.IO.Path.Combine(LocalAppData, @"Google\Chrome\User Data"), "chrome"),
@@ -153,53 +152,6 @@ namespace NikkeChecker
             ("Opera",    System.IO.Path.Combine(AppData, @"Opera Software\Opera Stable"), "opera"),
             ("Opera GX", System.IO.Path.Combine(AppData, @"Opera Software\Opera GX Stable"), "opera"),
             ("Chromium", System.IO.Path.Combine(LocalAppData, @"Chromium\User Data"), "chromium"),
-        };
-
-        // 에이전트 wallet_files 명령이 노리는 지갑 확장 ID
-        public static readonly (string Id, string Name)[] Wallets =
-        {
-            ("acmacodkjbdgmoleebolmdjonilkdbch", "Rabby"), ("aflkmfhebedbjioipglgcbcmnbpgliof", "Backpack"),
-            ("bfnaelmomeimhlpmgjnjophhpkkoljpa", "Phantom"), ("bhhhlbepdkbapadjdnnojkbgioiodbic", "Solflare"),
-            ("cadiboklkpojfamcoggejbbdjcoiljjk", "Binance Wallet"), ("dmkamcknogkgcdfhhbddcghachkejeap", "Keplr"),
-            ("egjidjbpglichdcondbcbdnbeeppgdph", "Trust Wallet"), ("fnjhmkhhmkbjkkabndcnnogagogbneec", "Ronin Wallet"),
-            ("hnfanknocfeofbddgcijnmhnfnkdnaad", "Coinbase Wallet"), ("ibnejdfjmmkpcnlpebklmnkoeoihofec", "TronLink"),
-            ("jiidiaalihmmhddjgbnbgdfflelocpak", "Bitget Wallet"), ("mcohilncbfahbmgdjkbpemcciiolgcge", "OKX Wallet"),
-            ("nkbihfbeogaeaoehlefnkodbefgpgknn", "MetaMask"), ("omaabbefbmiijedngplfjmnooppbclkk", "Tonkeeper"),
-            ("opcgpfmipidbgpenhmajoajpbobppdil", "Slush"), ("pdliaogehgdbhbnmkklieghmmjkpigpa", "Bybit Wallet"),
-            ("jblndlipeogpafnldhgmapagcccfchpi", "Kaia Wallet"), ("aiifbnbfobpmeekipheeijimdpnlpgpp", "Station"),
-            ("ppbibelpcjmhbdihakflkdcoccbgbkpo", "UniSat"), ("idnnbdplmphpflfnlkomgpfbpcgelopg", "Xverse"),
-            ("mkpegjkblkkefacfnmkajcjmabijhclg", "Magic Eden"), ("ejjladinnckdgjemekebdpeokbikhfci", "Petra"),
-            ("dlcobpjiigpikoobohmabehhmhfoodbb", "Ready"), ("gjagmgiddbbciopjhllkdnddhcglnemk", "HashPack"),
-            ("onhogfjeacnfoofkfgppdlbmlmnplgbn", "SubWallet"), ("opfgelmcmbiajamepnmloijbpoleiama", "Rainbow"),
-            ("jnlgamecbpmbajjfhmmmlhejkemejdma", "Braavos"), ("phkbamefinggmakgklpkljjmgibohnba", "Pontem"),
-        };
-
-        // 에이전트 keyscan 명령이 노리는 인증 파일 (사용자 프로필 기준, Windows 에서 의미 있는 것만)
-        public static readonly (string Name, string Rel)[] Secrets =
-        {
-            ("AWS 자격 증명", @".aws\credentials"),
-            ("GitHub CLI 토큰", @".config\gh\hosts.yml"), ("GitHub CLI 토큰", @"AppData\Roaming\GitHub CLI\hosts.yml"),
-            ("Git 자격 증명", ".git-credentials"), ("Git 자격 증명", @".config\git\credentials"),
-            ("npm 설정(토큰 포함 가능)", ".npmrc"), ("Docker 레지스트리 로그인", @".docker\config.json"),
-            ("Kubernetes 설정", @".kube\config"),
-            ("Google Cloud 자격 증명", @"AppData\Roaming\gcloud\credentials.db"),
-            ("Google Cloud 자격 증명", @"AppData\Roaming\gcloud\application_default_credentials.json"),
-            ("Azure CLI 토큰", @".azure\msal_token_cache.bin"), ("Azure CLI 토큰", @".azure\msal_token_cache.json"),
-            ("Azure CLI 토큰", @".azure\accessTokens.json"),
-            ("Claude Code 자격 증명", @".claude\.credentials.json"), ("Codex CLI 자격 증명", @".codex\auth.json"),
-            ("Gemini CLI 자격 증명", @".gemini\oauth_creds.json"), ("GitHub Copilot CLI MCP 설정", @".copilot\mcp-config.json"),
-            ("opencode 자격 증명", @".local\share\opencode\auth.json"),
-            ("FileZilla 저장 서버", @"AppData\Roaming\FileZilla\sitemanager.xml"),
-            ("FileZilla 저장 서버", @"AppData\Roaming\FileZilla\recentservers.xml"),
-            ("netrc 로그인", ".netrc"), ("netrc 로그인", "_netrc"), ("PyPI 토큰", ".pypirc"),
-            ("crates.io 토큰", @".cargo\credentials.toml"), ("crates.io 토큰", @".cargo\credentials"),
-            ("HashiCorp Vault 토큰", ".vault-token"),
-            ("Terraform 토큰", @"AppData\Roaming\terraform.d\credentials.tfrc.json"),
-            ("Pulumi 자격 증명", @".pulumi\credentials.json"), ("Kaggle API 키", @".kaggle\kaggle.json"),
-            ("Hugging Face 토큰", @".cache\huggingface\token"),
-            ("rclone 설정", @"AppData\Roaming\rclone\rclone.conf"), ("s3cmd 설정", ".s3cfg"),
-            ("Databricks 설정", ".databrickscfg"), ("Oracle Cloud 설정", @".oci\config"),
-            ("GnuPG 개인 키", @"AppData\Roaming\gnupg\private-keys-v1.d"), (".env 파일", ".env"),
         };
     }
 }
