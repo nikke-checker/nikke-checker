@@ -8,10 +8,11 @@ namespace NikkeChecker
         [STAThread]
         private static int Main(string[] args)
         {
-            // 승격된 하위 프로세스: hosts/방화벽 차단만 수행하고 종료
-            if (args.Length >= 2 && args[0] == "--apply-block")
-                return Remediator.RunBlockMode(args[1]);
+            // 승격된 하위 프로세스: 관리자 작업만 수행하고 종료
+            if (args.Length >= 3 && args[0] == "--elevated")
+                return Remediator.RunElevatedMode(args[1], args[2]);
 
+            Native.SuppressDriveErrorDialogs();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
